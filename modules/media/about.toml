@@ -1,0 +1,3 @@
+name = "media"
+llm_description = "Autonomous media processing: STT audio transcription, TTS speech synthesis, sticker catalog and vision hooks"
+human_description = "Media engine (STT, TTS, vision, stickers)"

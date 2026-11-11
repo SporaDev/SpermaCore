@@ -12,8 +12,10 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/coder/websocket"
@@ -390,6 +392,26 @@ func NewServer(cfg Config, hub *Hub, state StateProvider) *Server {
 		cfg.AuthToken = token
 	}
 	return &Server{cfg: cfg, hub: hub, state: state, auth: newAuthState(token)}
+}
+
+// IsPortInUseError returns true if the error indicates a socket address collision (bind: address already in use)
+func IsPortInUseError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var opErr *net.OpError
+	if errors.As(err, &opErr) {
+		if syscallErr, ok := opErr.Err.(*os.SyscallError); ok {
+			if errors.Is(syscallErr.Err, syscall.EADDRINUSE) {
+				return true
+			}
+		}
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "address already in use") ||
+		strings.Contains(msg, "only one usage of each socket address") ||
+		strings.Contains(msg, "wsaeaddrinuse") ||
+		strings.Contains(msg, "eaddrinuse")
 }
 
 func (s *Server) Start() error {

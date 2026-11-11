@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	scgrouper "spermacore/core/grouper"
 	"sync"
 	"time"
@@ -13,7 +14,7 @@ type GrouperConfig struct {
 	Joiner          string
 }
 
-var grouperDefaults = map[string]any{"enabled": true, "groups_only": true, "grouper_time": "1.5s", "window_ms": 1500, "max_wait_ms": 10000, "joiner": "\n"}
+var grouperDefaults = map[string]any{"enabled": true, "groups_only": false, "grouper_time": "1.5s", "window_ms": 1500, "max_wait_ms": 10000, "joiner": "\n"}
 
 func LoadGrouperConfig(s map[string]any) *GrouperConfig {
 	c := &GrouperConfig{Enabled: true, Window: 3 * time.Second, MaxWait: 10 * time.Second, Joiner: "\n"}
@@ -47,17 +48,35 @@ func LoadGrouperConfig(s map[string]any) *GrouperConfig {
 
 type Grouper struct{ inner *scgrouper.Grouper }
 
+func pollToJSON(p *Poll) string {
+	if p == nil {
+		return ""
+	}
+	b, err := json.Marshal(p)
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
 func NewGrouper(c *GrouperConfig, flush func(transportEvent)) *Grouper {
 	if c == nil {
 		c = LoadGrouperConfig(nil)
 	}
 	return &Grouper{inner: scgrouper.New(scgrouper.Config{Enabled: c.Enabled, GroupsOnly: c.GroupsOnly, Window: c.Window, MaxWait: c.MaxWait, Joiner: c.Joiner}, func(e scgrouper.Event) {
-		flush(transportEvent{Type: e.Type, Transport: e.Transport, ChatID: e.ChatID, SenderID: e.SenderID, SenderName: e.SenderName, SenderUsername: e.SenderUsername, MessageID: e.MessageID, ReplyToID: e.ReplyToID, TopicID: e.TopicID, ReplyFromSelf: e.ReplyFromSelf, SelfUsername: e.SelfUsername, SelfName: e.SelfName, SelfID: e.SelfID, Forum: e.Forum, Text: e.Text, MediaType: e.MediaType, PhotoPath: e.PhotoPath, CustomEmojiIDs: e.CustomEmojiIDs, StickerID: e.StickerID, StickerEmoji: e.StickerEmoji, StickerAccessHash: e.StickerAccessHash, StickerFileRef: e.StickerFileRef, StickerFileID: e.StickerFileID, SemanticContext: e.SemanticContext, Activation: e.Activation})
+		ev := transportEvent{Type: e.Type, Transport: e.Transport, ChatID: e.ChatID, SenderID: e.SenderID, SenderName: e.SenderName, SenderUsername: e.SenderUsername, MessageID: e.MessageID, ReplyToID: e.ReplyToID, TopicID: e.TopicID, ReplyFromSelf: e.ReplyFromSelf, SelfUsername: e.SelfUsername, SelfName: e.SelfName, SelfID: e.SelfID, Forum: e.Forum, Text: e.Text, MediaType: e.MediaType, PhotoPath: e.PhotoPath, Date: e.Date, CustomEmojiIDs: e.CustomEmojiIDs, StickerID: e.StickerID, StickerEmoji: e.StickerEmoji, StickerAccessHash: e.StickerAccessHash, StickerFileRef: e.StickerFileRef, StickerFileID: e.StickerFileID, StickerAnimated: e.StickerAnimated, StickerThumbPath: e.StickerThumbPath, StickerWidth: e.StickerWidth, StickerHeight: e.StickerHeight, SemanticContext: e.SemanticContext, Activation: e.Activation, InlineContext: e.InlineContext}
+		if e.PollJSON != "" {
+			var p Poll
+			if err := json.Unmarshal([]byte(e.PollJSON), &p); err == nil {
+				ev.Poll = &p
+			}
+		}
+		flush(ev)
 	})}
 }
 func (g *Grouper) Enabled() bool { return g != nil && g.inner.Enabled() }
 func (g *Grouper) Add(e transportEvent) {
-	g.inner.Add(scgrouper.Event{Type: e.Type, Transport: e.Transport, ChatID: e.ChatID, SenderID: e.SenderID, SenderName: e.SenderName, SenderUsername: e.SenderUsername, MessageID: e.MessageID, ReplyToID: e.ReplyToID, TopicID: e.TopicID, ReplyFromSelf: e.ReplyFromSelf, SelfUsername: e.SelfUsername, SelfName: e.SelfName, SelfID: e.SelfID, Forum: e.Forum, Text: e.Text, MediaType: e.MediaType, PhotoPath: e.PhotoPath, CustomEmojiIDs: e.CustomEmojiIDs, StickerID: e.StickerID, StickerEmoji: e.StickerEmoji, StickerAccessHash: e.StickerAccessHash, StickerFileRef: e.StickerFileRef, StickerFileID: e.StickerFileID, SemanticContext: e.SemanticContext, Activation: e.Activation})
+	g.inner.Add(scgrouper.Event{Type: e.Type, Transport: e.Transport, ChatID: e.ChatID, SenderID: e.SenderID, SenderName: e.SenderName, SenderUsername: e.SenderUsername, MessageID: e.MessageID, ReplyToID: e.ReplyToID, TopicID: e.TopicID, ReplyFromSelf: e.ReplyFromSelf, SelfUsername: e.SelfUsername, SelfName: e.SelfName, SelfID: e.SelfID, Forum: e.Forum, Text: e.Text, MediaType: e.MediaType, PhotoPath: e.PhotoPath, Date: e.Date, CustomEmojiIDs: e.CustomEmojiIDs, StickerID: e.StickerID, StickerEmoji: e.StickerEmoji, StickerAccessHash: e.StickerAccessHash, StickerFileRef: e.StickerFileRef, StickerFileID: e.StickerFileID, StickerAnimated: e.StickerAnimated, StickerThumbPath: e.StickerThumbPath, StickerWidth: e.StickerWidth, StickerHeight: e.StickerHeight, SemanticContext: e.SemanticContext, Activation: e.Activation, InlineContext: e.InlineContext, PollJSON: pollToJSON(e.Poll)})
 }
 func (g *Grouper) FlushAll() {
 	if g != nil {

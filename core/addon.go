@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 )
 
 // artifactExt returns shared library file extension for current os.
@@ -31,17 +32,32 @@ func resolveModuleDir(rootDir, entry string) (name, dir string) {
 }
 
 // findBuiltArtifact searches for compiled shared library in module build directory.
+// A module may be built by different toolchains into different subdirectories
+// (e.g. build/telegram.dll from the root CMake build and build/cmake/telegram.dll
+// from the per-module build), so the newest artifact wins instead of the first
+// path found during the walk.
 func findBuiltArtifact(moduleDir, name string) string {
 	buildDir := filepath.Join(moduleDir, "build")
 	ext := artifactExt()
 	var found string
+	var foundMod time.Time
 	_ = filepath.WalkDir(buildDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil || d == nil || d.IsDir() {
 			return nil
 		}
-		if d.Name() == name+ext {
+		if d.Name() != name+ext {
+			return nil
+		}
+		info, statErr := d.Info()
+		if statErr != nil {
+			if found == "" {
+				found = path
+			}
+			return nil
+		}
+		if found == "" || info.ModTime().After(foundMod) {
 			found = path
-			return filepath.SkipAll
+			foundMod = info.ModTime()
 		}
 		return nil
 	})

@@ -140,10 +140,21 @@ func main() {
 				GetLogger("webui").Info(f, a...)
 			})
 			if werr != nil {
-				GetLogger("webui").Error("startup error: %v", werr)
+				if webui.IsPortInUseError(werr) {
+					wlog := GetLogger("webui")
+					wlog.Error("================================================================================")
+					wlog.Error("PORT %d IS ALREADY IN USE! Another process is already listening on %s:%d.", webCfg.Port, webCfg.Bind, webCfg.Port)
+					wlog.Error("Action required:")
+					wlog.Error("  1. Change port in config.toml: [webui] port = %d", webCfg.Port+1)
+					wlog.Error("  2. Or terminate the process occupying port %d", webCfg.Port)
+					wlog.Error("WebUI could not start and will remain offline.")
+					wlog.Error("================================================================================")
+				} else {
+					GetLogger("webui").Error("startup error: %v", werr)
+				}
 				webInst = nil
 			} else if webInst != nil {
-				webInst.Prompter().SetQRLoginHandler(telegramStartQRLogin)
+				webInst.Prompter().SetQRLoginHandler(startTransportQRLogin)
 				if gDash != nil {
 					gDash.SetWebUIURL(webInst.URL())
 				}
@@ -246,6 +257,12 @@ func main() {
 	if *rebuild {
 		log.Info("-rebuild flag: full module rebuild")
 		cleanAllModuleBuilds(filepath.Dir(cfg.SourcePath), log)
+	}
+
+	if cfg.isPluginEnabled("telegram") {
+		if err := EnsureTDLibBinary(cfg.Core.DataDir); err != nil {
+			log.Warn("tdlib auto-download warning: %v", err)
+		}
 	}
 
 	addons := loadAddons(filepath.Dir(cfg.SourcePath), cfg, log)

@@ -193,13 +193,13 @@ load = [
 
 [plugins.telegram]
 enabled      = true
-api_id       = 33558968
+api_id       = "${SPERMACORE_TELEGRAM_API_ID}"
 api_hash     = "${SPERMACORE_TELEGRAM_API_HASH}"
 phone        = "${SPERMACORE_TELEGRAM_PHONE}"
 login_mode   = "qr"            # "qr", "phone" или "auto"
 reply_to     = true            # умное цитирование
-device_model = "iPhone 16 Pro"
-app_version  = "13.1.1"
+device_model = "Desktop"
+app_version  = "1.0.0"
 
 [plugins.agentloop]
 enabled            = true

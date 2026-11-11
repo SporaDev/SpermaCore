@@ -1,0 +1,4 @@
+name = "demowidget"
+llm_description = "demowidget plugin"
+human_description = "demowidget module"
+

@@ -795,7 +795,20 @@ const app = {
 const streams = {};
 const pluginWidgets = {};
 
+let isPromptingToken = false;
 function connectWS() {
+  if (app.reconnectTimer) {
+    clearTimeout(app.reconnectTimer);
+    app.reconnectTimer = null;
+  }
+  if (app.ws) {
+    app.ws.onopen = null;
+    app.ws.onclose = null;
+    app.ws.onerror = null;
+    app.ws.onmessage = null;
+    try { app.ws.close(); } catch {}
+    app.ws = null;
+  }
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   let url = proto + '//' + location.host + '/ws';
   if (AUTH_TOKEN) url += '?token=' + encodeURIComponent(AUTH_TOKEN);
@@ -806,19 +819,28 @@ function connectWS() {
 
   app.ws.onopen = () => {
     app.wsConnected = true;
+    isPromptingToken = false;
     updateStatus();
     console.log('[ws] connected');
   };
-  app.ws.onclose = () => {
+  app.ws.onclose = (ev) => {
     app.wsConnected = false;
     updateStatus();
-    console.log('[ws] closed, reconnect in 2s');
-    if (!AUTH_TOKEN) {
-      const entered = window.prompt('WebUI auth token:');
-      if (entered) {
-        AUTH_TOKEN = entered.trim();
-        try { localStorage.setItem(TOKEN_KEY, AUTH_TOKEN); } catch {}
-      }
+    console.log('[ws] closed, code=', ev.code);
+    if (!AUTH_TOKEN && !isPromptingToken) {
+      isPromptingToken = true;
+      setTimeout(() => {
+        const entered = window.prompt('WebUI auth token:');
+        isPromptingToken = false;
+        if (entered) {
+          AUTH_TOKEN = entered.trim();
+          try { localStorage.setItem(TOKEN_KEY, AUTH_TOKEN); } catch {}
+          loginWithToken(AUTH_TOKEN).finally(() => {
+            connectWS();
+          });
+          return;
+        }
+      }, 50);
     }
     clearTimeout(app.reconnectTimer);
     app.reconnectTimer = setTimeout(connectWS, 2000);
@@ -924,12 +946,19 @@ function handleEvent(evt) {
 }
 
 let pendingPromptID = null;
+let promptInFlight = false;
 function showPrompt(data) {
   const modal = document.getElementById('prompt-modal');
   const input = document.getElementById('prompt-input');
   const question = document.getElementById('prompt-question');
+  const btnOk = document.getElementById('prompt-ok');
+  const btnCancel = document.getElementById('prompt-cancel');
   if (!modal || !input || !question) return;
   pendingPromptID = data.id;
+  promptInFlight = false;
+  if (btnOk) btnOk.disabled = false;
+  if (btnCancel) btnCancel.disabled = false;
+  input.disabled = false;
   question.textContent = data.question || 'input';
   input.value = (data.default !== undefined && data.default !== null) ? String(data.default) : '';
   input.type = (data.kind === 'password') ? 'password' : 'text';
@@ -938,10 +967,17 @@ function showPrompt(data) {
   input.select();
 }
 function answerPrompt(value) {
-  if (!pendingPromptID) return;
+  if (!pendingPromptID || promptInFlight) return;
+  promptInFlight = true;
   const id = pendingPromptID;
   pendingPromptID = null;
   const modal = document.getElementById('prompt-modal');
+  const btnOk = document.getElementById('prompt-ok');
+  const btnCancel = document.getElementById('prompt-cancel');
+  const input = document.getElementById('prompt-input');
+  if (btnOk) btnOk.disabled = true;
+  if (btnCancel) btnCancel.disabled = true;
+  if (input) input.disabled = true;
   if (modal) modal.classList.remove('active');
   if (app.ws && app.ws.readyState === WebSocket.OPEN) {
     app.ws.send(JSON.stringify({ type: 'prompt_reply', data: { id, value } }));
@@ -1802,21 +1838,21 @@ document.addEventListener('DOMContentLoaded', () => {
   renderAllWidgets();
   connectWS();
 
-  const statusEl = document.getElementById('status');
-  if (statusEl) {
-    statusEl.style.cursor = 'pointer';
-    statusEl.title = 'Click to configure auth token';
-    statusEl.addEventListener('click', () => {
-      const entered = window.prompt('WebUI auth token:', AUTH_TOKEN);
-      if (entered !== null) {
-        AUTH_TOKEN = entered.trim();
-        try { localStorage.setItem(TOKEN_KEY, AUTH_TOKEN); } catch {}
-        if (AUTH_TOKEN) loginWithToken(AUTH_TOKEN);
-        if (app.ws) app.ws.close();
-        connectWS();
-      }
-    });
-  }
+  const statusEl = document.getElementById('status');
+  if (statusEl) {
+    statusEl.style.cursor = 'pointer';
+    statusEl.title = 'Click to configure auth token';
+    statusEl.addEventListener('click', () => {
+      const entered = window.prompt('WebUI auth token:', AUTH_TOKEN);
+      if (entered !== null) {
+        AUTH_TOKEN = entered.trim();
+        try { localStorage.setItem(TOKEN_KEY, AUTH_TOKEN); } catch {}
+        loginWithToken(AUTH_TOKEN).finally(() => {
+          connectWS();
+        });
+      }
+    });
+  }
   document.getElementById('btn-settings').addEventListener('click', openSettings);
   document.getElementById('btn-telegram-qr').addEventListener('click', () => {
     if (app.ws && app.ws.readyState === WebSocket.OPEN) {

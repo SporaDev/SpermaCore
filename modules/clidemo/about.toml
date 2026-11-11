@@ -1,0 +1,4 @@
+name = "clidemo"
+llm_description = "clidemo plugin"
+human_description = "clidemo module"
+

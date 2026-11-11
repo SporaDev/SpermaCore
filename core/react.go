@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	scEmbedsc "spermacore/core/embedsc"
 	"spermacore/core/media"
@@ -29,9 +30,286 @@ const defaultReactPrompt = `if you want to react to the current message, call:
   react(chat_id={chat_id}, message_id={message_id}, emoji="...")
 a tool call is an action, not text. after calling react, do not write a textual confirmation such as '(reaction added)'.
 for send_message, always use the chat_id from the requested destination. if the user asks to answer in a group, do not reuse a private-chat chat_id.
-activation semantics: direct = you were addressed by name/@/reply, answer normally; priority = a trusted participant, answer but stay brief; ambient = you are joining on your own, only speak if you add real value; private = normal one-on-one chat.`
+activation semantics: direct = you were addressed by name/@/reply, answer normally; priority = a trusted participant, answer but stay brief; ambient = you are joining on your own, only speak if you add real value; private = normal one-on-one chat.
+inline keyboards: when the current message has an inline keyboard, its buttons are listed in INLINE KEYBOARD ON CURRENT MESSAGE. press one with press_button(chat_id, message_id, button="text or index") only if it is useful. A button may appear shortly after the message is sent; press_button waits for the keyboard to appear, so call it instead of assuming the keyboard is missing.
+inline bots: you can query an inline bot with inline_query(bot="@name", query="...", chat_id=...) and send one of its results with send_inline_result(chat_id, query_id, result_id).
+invite links: if a group invite link looks interesting, first check_invite(link), then join_chat(link) only if you decide to join; otherwise do not join.
+voice notes: append |VOICE| to your reply to send it as a voice message (ГС) instead of text; use |VOICE=text| to voice a different wording. Do not add voice and text duplicates.
+premium reactions: react(..., emoji="custom:<id>") sets a Telegram Premium custom emoji reaction; ids come from list_custom_emojis or emoji.json.
+calls: call(action="start") starts a voice call (spoken greeting, incoming voice is transcribed, all answers are voiced automatically), call(action="end") hangs up, call(action="status") reports the state. Only start a call when the user asks for one.
+polls: if the current message is a Telegram poll or quiz, its question and options are listed with 0-based ids. Vote with vote_poll(chat_id, message_id, option_ids=[...]) when it fits or the user asks; never vote on a closed poll.
+empty answers: if there is nothing meaningful to say, call ignore. Never send "(empty)".`
 
 var errIgnoreMessage = errors.New("message ignored by model")
+
+// errAlreadyDelivered means the reply was already pushed to the chat by a
+// message-delivery tool call, so the worker must not send it again.
+var errAlreadyDelivered = errors.New("response already delivered by tool")
+
+// messageToolTextFields maps message-delivery tools to the argument that
+// carries user-visible text.
+var messageToolTextFields = map[string]string{
+	"send_message":     "text",
+	"send_to_username": "text",
+	"edit_message":     "text",
+	"send_photo":       "caption",
+}
+
+// sanitizedMessageToolCalls strips AI control markers from message-delivery
+// tool arguments. Chat tools return one argument set per |SPLIT| bubble;
+// editing and captions return a single cleaned argument set. A nil result
+// means the arguments contain no markers and can be passed through untouched.
+func sanitizedMessageToolCalls(toolName string, args map[string]any) ([]map[string]any, []aiAction) {
+	field, ok := messageToolTextFields[toolName]
+	if !ok || len(args) == 0 {
+		return nil, nil
+	}
+	raw, _ := args[field].(string)
+	if strings.TrimSpace(raw) == "" {
+		return nil, nil
+	}
+
+	parts, actions := splitAIResponse(raw)
+	if len(parts) > 1 && toolName != "send_message" && toolName != "send_to_username" {
+		// only chat messages can be split into several bubbles
+		parts = []string{strings.Join(parts, "\n")}
+	}
+	if len(parts) == 1 && len(actions) == 0 && parts[0] == strings.TrimSpace(raw) {
+		return nil, nil
+	}
+
+	calls := make([]map[string]any, 0, len(parts))
+	for _, part := range parts {
+		clone := make(map[string]any, len(args))
+		for k, v := range args {
+			clone[k] = v
+		}
+		clone[field] = part
+		calls = append(calls, clone)
+	}
+	return calls, actions
+}
+
+// messageToolParts returns one argument set per outgoing bubble for a
+// message-delivery tool. ok is false for tools that do not produce
+// user-visible text (or when the text argument is empty).
+func messageToolParts(toolName string, args map[string]any) ([]map[string]any, []aiAction, bool) {
+	field, isMessageTool := messageToolTextFields[toolName]
+	if !isMessageTool {
+		return nil, nil, false
+	}
+	raw, _ := args[field].(string)
+	if strings.TrimSpace(raw) == "" {
+		return nil, nil, false
+	}
+	calls, actions := sanitizedMessageToolCalls(toolName, args)
+	if calls == nil {
+		calls = []map[string]any{args}
+	}
+	return calls, actions, true
+}
+
+// toolResultOK reports whether a message-delivery tool actually delivered the
+// text. Plugins signal soft failures with {"status":"error",...} instead of an
+// error return value.
+func toolResultOK(result string) bool {
+	return !strings.Contains(result, `"status":"error"`) && !strings.HasPrefix(result, "ERROR:")
+}
+
+// normalizeDeliveredText reduces a message to a comparable key: control markers
+// are stripped, split bubbles are joined and whitespace/case are ignored. This
+// lets the loop recognise the same text arriving through the tool path and then
+// again as the final model answer.
+func normalizeDeliveredText(text string) string {
+	if parts, _ := splitAIResponse(text); len(parts) == 1 {
+		text = parts[0]
+	} else if len(parts) > 1 {
+		text = strings.Join(parts, "")
+	}
+	return strings.Map(func(r rune) rune {
+		if unicode.IsSpace(r) {
+			return -1
+		}
+		return unicode.ToLower(r)
+	}, text)
+}
+
+// deliveredTracker remembers text already pushed to a chat during one react
+// loop so the same message is not emitted twice (tool call plus final answer,
+// or two identical tool calls). Entries are scoped per destination: sending
+// the same line to two different chats is legitimate.
+type deliveredTracker struct {
+	keys     map[string]map[string]struct{}
+	combined map[string]string
+}
+
+func newDeliveredTracker() *deliveredTracker {
+	return &deliveredTracker{
+		keys:     make(map[string]map[string]struct{}),
+		combined: make(map[string]string),
+	}
+}
+
+// deliveryTarget identifies where a message-delivery tool call sends its text.
+func deliveryTarget(toolName string, args map[string]any) string {
+	if v, ok := args["chat_id"]; ok {
+		if id := formatChatID(v); id != "" {
+			return "chat:" + id
+		}
+	}
+	if v, ok := args["username"].(string); ok {
+		if u := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(v), "@")); u != "" {
+			return "user:" + u
+		}
+	}
+	return "chat:"
+}
+
+func formatChatID(v any) string {
+	switch id := v.(type) {
+	case string:
+		return strings.TrimSpace(id)
+	case int:
+		return strconv.Itoa(id)
+	case int64:
+		return strconv.FormatInt(id, 10)
+	case float64:
+		return strconv.FormatInt(int64(id), 10)
+	case json.Number:
+		return id.String()
+	}
+	return ""
+}
+
+func (d *deliveredTracker) add(target, text string) {
+	for _, part := range deliveredParts(text) {
+		key := normalizeDeliveredText(part)
+		if key == "" {
+			continue
+		}
+		keys := d.keys[target]
+		if keys == nil {
+			keys = make(map[string]struct{})
+			d.keys[target] = keys
+		}
+		keys[key] = struct{}{}
+		d.combined[target] += key
+	}
+}
+
+// deliveredParts expands a text into its individual bubbles.
+func deliveredParts(text string) []string {
+	parts, _ := splitAIResponse(text)
+	if len(parts) == 0 {
+		return nil
+	}
+	return parts
+}
+
+func (d *deliveredTracker) seen(target, text string) bool {
+	key := normalizeDeliveredText(text)
+	if key == "" {
+		return false
+	}
+	_, ok := d.keys[target][key]
+	return ok
+}
+
+// repeats reports whether text is a duplicate of what was already delivered to
+// target, either as a single message or as the whole sequence of bubbles.
+func (d *deliveredTracker) repeats(target, text string) bool {
+	keys := d.keys[target]
+	if len(keys) == 0 {
+		return false
+	}
+	key := normalizeDeliveredText(text)
+	if key == "" {
+		return false
+	}
+	if _, ok := keys[key]; ok {
+		return true
+	}
+	return d.combined[target] != "" && key == d.combined[target]
+}
+
+func (d *deliveredTracker) empty() bool {
+	for _, keys := range d.keys {
+		if len(keys) > 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// humanAgo renders a coarse, human friendly "time ago" string used to give the
+// model a sense of how much time passed since the user wrote the message.
+func humanAgo(d time.Duration) string {
+	if d < 0 {
+		d = 0
+	}
+	switch {
+	case d < 5*time.Second:
+		return "just now"
+	case d < time.Minute:
+		return fmt.Sprintf("%ds ago", int(d.Seconds()))
+	case d < time.Hour:
+		return fmt.Sprintf("%dm ago", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh ago", int(d.Hours()))
+	default:
+		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
+	}
+}
+
+// messageTimeHeader builds the timestamp line prepended to the current user
+// message so the send time travels together with the text.
+func messageTimeHeader(at time.Time, ago string) string {
+	if at.IsZero() {
+		return ""
+	}
+	if ago == "" {
+		return "[" + at.Format("2006-01-02 15:04") + "]"
+	}
+	return "[" + at.Format("2006-01-02 15:04") + " · " + ago + "]"
+}
+
+// stampHistory prefixes stored conversation history entries with their time.
+func stampHistory(text string, at time.Time) string {
+	text = strings.TrimSpace(text)
+	if text == "" || at.IsZero() {
+		return text
+	}
+	return "[" + at.Format("2006-01-02 15:04") + "] " + text
+}
+
+// mediaPromptText returns the text paired with an incoming media message,
+// synthesising a short prompt when the user sent media without a caption.
+func mediaPromptText(ev transportEvent) string {
+	if t := strings.TrimSpace(ev.Text); t != "" {
+		return t
+	}
+	switch ev.MediaType {
+	case "photo":
+		return "what is in this photo?"
+	case "gif", "video":
+		return "what is happening in this video?"
+	case "video_msg":
+		return "what is happening in this video message?"
+	case "animated_sticker":
+		return "what does this animated sticker express?"
+	case "sticker":
+		return "what does this sticker express?"
+	case "voice", "audio":
+		return "what is said in this voice message?"
+	}
+	return ev.Text
+}
+
+// isTgsDocument reports whether a path points at a Telegram Lottie sticker
+// (.tgs), which cannot be decoded by ffmpeg or the vision model.
+func isTgsDocument(path string) bool {
+	return strings.EqualFold(filepath.Ext(path), ".tgs")
+}
 
 // loadPromptFile loads prompt from dataDir/<filename> or dataDir/prompts/<filename>.
 // If neither exists, it writes the default template to dataDir/<filename> and returns defaultText.
@@ -122,6 +400,93 @@ func collectTools(addons []*LoadedAddon, log *Logger) ([]map[string]any, map[str
 		},
 	})
 	owners["ignore"] = nil
+
+	tools = append(tools, map[string]any{
+		"type": "function",
+		"function": map[string]any{
+			"name": "call",
+			"description": "Start or end a voice call with the user. On start the bot joins the call, greets by voice note " +
+				"and every incoming voice message is transcribed (Whisper) so the bot can answer by voice. " +
+				"Use action=start to call, action=end to hang up (optionally pass text as a spoken farewell), " +
+				"action=status to check whether a call is active. Only the current chat can be called.",
+			"parameters": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"action":  map[string]any{"type": "string", "enum": []string{"start", "end", "status"}, "description": "start (default), end or status"},
+					"chat_id": map[string]any{"type": "integer", "description": "Optional chat id; defaults to the current chat"},
+					"text":    map[string]any{"type": "string", "description": "Optional spoken line: greeting on start, farewell on end"},
+				},
+				"required": []string{},
+			},
+		},
+	})
+	owners["call"] = nil
+
+	if _, exists := owners["block"]; !exists {
+		tools = append(tools, map[string]any{
+			"type": "function",
+			"function": map[string]any{
+				"name":        "block",
+				"description": "Permanently block a toxic, obnoxious or annoying user. All their future messages will be completely ignored and discarded by the core. Defaults to the current sender if username is omitted.",
+				"parameters": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"username": map[string]any{
+							"type":        "string",
+							"description": "Telegram username without @ (optional, defaults to current sender)",
+						},
+						"reason": map[string]any{
+							"type":        "string",
+							"description": "Short reason for the block",
+						},
+					},
+				},
+			},
+		})
+		owners["block"] = nil
+	}
+
+	if _, exists := owners["unblock"]; !exists {
+		tools = append(tools, map[string]any{
+			"type": "function",
+			"function": map[string]any{
+				"name":        "unblock",
+				"description": "Unblock a previously blocked user so their messages can be received again.",
+				"parameters": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"username": map[string]any{
+							"type":        "string",
+							"description": "Telegram username without @",
+						},
+					},
+					"required": []string{"username"},
+				},
+			},
+		})
+		owners["unblock"] = nil
+	}
+
+	if _, exists := owners["deletechat"]; !exists {
+		tools = append(tools, map[string]any{
+			"type": "function",
+			"function": map[string]any{
+				"name":        "deletechat",
+				"description": "Permanently delete the entire chat history for BOTH sides (revoke) and remove the chat from the chat list. Use when permanently cutting off a toxic user or wiping a private conversation.",
+				"parameters": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"chat_id": map[string]any{
+							"type":        "integer",
+							"description": "Telegram chat ID to delete for both participants",
+						},
+					},
+					"required": []string{"chat_id"},
+				},
+			},
+		})
+		owners["deletechat"] = nil
+	}
 	return tools, owners
 }
 
@@ -267,6 +632,11 @@ func reactLoopAttempt(ctx context.Context, ev transportEvent, addons []*LoadedAd
 		who += "(@" + ev.SenderUsername + ")"
 	}
 	now := time.Now()
+	msgTime := now
+	if ev.Date > 0 {
+		msgTime = time.Unix(ev.Date, 0)
+	}
+	msgAge := humanAgo(now.Sub(msgTime))
 
 	replyToInfo := ""
 	if ev.ReplyFromSelf {
@@ -298,11 +668,14 @@ func reactLoopAttempt(ctx context.Context, ev transportEvent, addons []*LoadedAd
 	systemPrompt += fmt.Sprintf(
 		"\n\n=== CURRENT CONTEXT ===\n"+
 			"current_time = %s\n"+
+			"message_time = %s (when the user actually sent this message)\n"+
+			"message_age = %s\n"+
 			"chat_id = %d\n"+
 			"message_id = %d  (message you are replying to)\n"+
 			"%s"+
 			"%s"+
-			"sender = %s (id=%d)\n"+
+			"sender = %s (id=%d) - the user who sent this message\n"+
+			"you_are = %s (username: @%s, id=%d) - your own account, DO NOT confuse yourself with the sender\n"+
 			"priority = %d (0=ignore, 1=low, 2=medium, 3=highest)\n"+
 			"group = %t (chat_id=%d)\n"+
 			"activation = %s\n"+
@@ -311,12 +684,19 @@ func reactLoopAttempt(ctx context.Context, ev transportEvent, addons []*LoadedAd
 			"\n"+
 			"%s\n"+
 			"%s",
-		now.Format(time.RFC3339), ev.ChatID, ev.MessageID, editInfo, replyToInfo, who, ev.SenderID,
+		now.Format(time.RFC3339), msgTime.Format(time.RFC3339), msgAge,
+		ev.ChatID, ev.MessageID, editInfo, replyToInfo, who, ev.SenderID,
+		ev.SelfName, ev.SelfUsername, ev.SelfID,
 		userPriority(ev), ev.ChatID < 0, ev.ChatID, activationOrDefault(ev.Activation), ev.MediaType, ev.StickerID,
 		reactRules, activationRule)
 
 	if userProfileCtx := getUserProfileContext(cfg.Core.DataDir, ev.SenderID); userProfileCtx != "" {
 		systemPrompt += "\n\n" + userProfileCtx
+	}
+
+	// inline bot attribution, inline keyboards, callback presses and invite links
+	if strings.TrimSpace(ev.InlineContext) != "" {
+		systemPrompt += "\n\n" + ev.InlineContext
 	}
 
 	if len(ev.CustomEmojiIDs) > 0 {
@@ -333,28 +713,43 @@ func reactLoopAttempt(ctx context.Context, ev transportEvent, addons []*LoadedAd
 		}
 	}
 
+	if (ev.MediaType == "sticker" || ev.MediaType == "animated_sticker") && ev.StickerID != "" {
+		if rec := media.FindSticker(cfg.Core.DataDir, ev.StickerID); rec != nil && strings.TrimSpace(rec.Description) != "" {
+			systemPrompt += "\n\n=== STICKER IN MESSAGE (vision catalog) ===\n" +
+				"sticker_id = " + rec.ID + "\n" +
+				"emoji = " + rec.Emoji + "\n" +
+				"description = " + rec.Description
+		}
+	}
+
 	history := gHistory.Get(ev.ChatID)
 
-	// construct user message with base64 image or video path
-	userMsg := ChatMessage{Role: "user", Content: ev.Text}
-	if ev.PhotoPath != "" {
-		ext := strings.ToLower(filepath.Ext(ev.PhotoPath))
-		if ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".webp" || (ev.MediaType != "video" && ev.MediaType != "gif") {
+	// construct the user message: attach media explicitly by modality and
+	// prepend the moment the user actually sent it.
+	userMsg := ChatMessage{Role: "user", Content: mediaPromptText(ev)}
+	switch {
+	case ev.MediaType == "voice" || ev.MediaType == "audio":
+		if ev.PhotoPath != "" {
+			userMsg.Audios = []string{ev.PhotoPath}
+			log.Debug("audio: attached %s (%s)", ev.PhotoPath, ev.MediaType)
+		}
+	case ev.MediaType == "gif" || ev.MediaType == "video" || ev.MediaType == "video_msg" ||
+		ev.StickerAnimated:
+		if ev.PhotoPath != "" && !isTgsDocument(ev.PhotoPath) {
+			userMsg.Videos = []string{ev.PhotoPath}
+			log.Debug("video: attached %s (%s)", ev.PhotoPath, ev.MediaType)
+		}
+	default:
+		if ev.PhotoPath != "" {
 			b64, err := readFileBase64(ev.PhotoPath)
 			if err == nil {
-				if userMsg.Content == "" {
-					userMsg.Content = "what is in this photo?"
-				}
 				userMsg.Images = []string{b64}
 				log.Debug("vision: attached image %s (%d bytes)", ev.PhotoPath, len(b64))
 			} else {
 				log.Warn("vision: cannot read image %s: %v", ev.PhotoPath, err)
 			}
-		} else {
-			userMsg.Videos = []string{ev.PhotoPath}
 		}
 	}
-
 	// reserve extra capacity for tool-call rounds
 	messages := make([]ChatMessage, 0, len(history)+2+10)
 	messages = append(messages, ChatMessage{Role: "system", Content: systemPrompt})
@@ -369,15 +764,17 @@ func reactLoopAttempt(ctx context.Context, ev transportEvent, addons []*LoadedAd
 		maxIters = 1
 	}
 
-	// route vision requests to specialist model if configured
+	// route media requests to specialist model if configured
 	useModel := cfg.ModelFor("chat")
-	if (ev.PhotoPath != "" || len(userMsg.Images) > 0 || len(userMsg.Videos) > 0) && cfg.HasRoute("vision") {
+	if (len(userMsg.Images) > 0 || len(userMsg.Videos) > 0 || len(userMsg.Audios) > 0) && cfg.HasRoute("vision") {
 		useModel = cfg.ModelFor("vision")
 		log.Debug("vision: selected model %s for media processing", useModel)
 	}
 
 	// check streaming support
 	streaming, isStreaming := provider.(StreamingProvider)
+
+	delivered := newDeliveredTracker()
 
 	for iter := 0; iter < maxIters; iter++ {
 		var useTools []map[string]any
@@ -426,8 +823,26 @@ func reactLoopAttempt(ctx context.Context, ev transportEvent, addons []*LoadedAd
 			if strings.TrimSpace(msg.Content) == "|IGNORE|" {
 				return "", errIgnoreMessage
 			}
-			gHistory.Add(ev.ChatID, ChatMessage{Role: "user", Content: ev.Text})
-			gHistory.Add(ev.ChatID, ChatMessage{Role: "assistant", Content: msg.Content})
+			// A message tool may already have delivered this text (or the model
+			// returned nothing after sending). Sending it again would duplicate
+			// the bubbles in the chat. A fully empty answer means the model
+			// deliberately said nothing, so the message is ignored instead of
+			// sending a placeholder like "(empty)".
+			empty := strings.TrimSpace(msg.Content) == ""
+			if empty || delivered.repeats("chat:"+strconv.FormatInt(ev.ChatID, 10), msg.Content) {
+				gHistory.Add(ev.ChatID, ChatMessage{Role: "user", Content: stampHistory(ev.Text, msgTime)})
+				if !empty {
+					gHistory.Add(ev.ChatID, ChatMessage{Role: "assistant", Content: stampHistory(msg.Content, time.Now())})
+				}
+				if empty && delivered.empty() {
+					log.Debug("chat %d: empty final answer, ignoring the message", ev.ChatID)
+					return "", errIgnoreMessage
+				}
+				log.Debug("chat %d: final answer already delivered by tool, suppressing duplicate", ev.ChatID)
+				return "", errAlreadyDelivered
+			}
+			gHistory.Add(ev.ChatID, ChatMessage{Role: "user", Content: stampHistory(ev.Text, msgTime)})
+			gHistory.Add(ev.ChatID, ChatMessage{Role: "assistant", Content: stampHistory(msg.Content, time.Now())})
 			return msg.Content, nil
 		}
 
@@ -456,14 +871,186 @@ func reactLoopAttempt(ctx context.Context, ev transportEvent, addons []*LoadedAd
 				if toolName == "ignore" {
 					return "", errIgnoreMessage
 				}
-				r, err := owner.CallTool(toolName, string(argsJSON))
-				if err != nil {
-					result = fmt.Sprintf("ERROR: %v", err)
-					log.Error("tool %s execution error: %v", toolName, err)
-				} else if r == "" {
-					result = "null"
+				if toolName == "call" {
+					var spoken string
+					result, spoken = handleCallTool(ev, string(argsJSON), log)
+					if spoken != "" {
+						delivered.add("chat:"+strconv.FormatInt(ev.ChatID, 10), spoken)
+					}
+				} else if toolName == "block" {
+					var args struct {
+						Username string `json:"username"`
+						Reason   string `json:"reason"`
+						UserID   int64  `json:"user_id"`
+						ChatID   int64  `json:"chat_id"`
+					}
+					_ = json.Unmarshal([]byte(argsJSON), &args)
+					target := strings.TrimSpace(args.Username)
+					if target == "" {
+						target = ev.SenderUsername
+					}
+					if target == "" && ev.SenderID != 0 {
+						target = fmt.Sprintf("id:%d", ev.SenderID)
+					}
+					if target != "" {
+						setUserIgnored(target, true)
+						if ev.SenderID != 0 {
+							setUserIgnored(fmt.Sprintf("id:%d", ev.SenderID), true)
+						}
+					}
+					if owner != nil {
+						r, err := owner.CallTool(toolName, string(argsJSON))
+						if err == nil && r != "" {
+							result = r
+						} else {
+							result = fmt.Sprintf("User %s successfully blocked in filter and Telegram.", target)
+						}
+					} else {
+						_, _ = pluginSyscallJSON("tg.block_user", map[string]any{
+							"username": target,
+							"user_id":  ev.SenderID,
+							"chat_id":  ev.ChatID,
+						})
+						result = fmt.Sprintf("User %s successfully blocked in filter and Telegram.", target)
+					}
+				} else if toolName == "unblock" {
+					var args struct {
+						Username string `json:"username"`
+						UserID   int64  `json:"user_id"`
+						ChatID   int64  `json:"chat_id"`
+					}
+					_ = json.Unmarshal([]byte(argsJSON), &args)
+					target := strings.TrimSpace(args.Username)
+					if target != "" {
+						setUserIgnored(target, false)
+					}
+					if owner != nil {
+						r, err := owner.CallTool(toolName, string(argsJSON))
+						if err == nil && r != "" {
+							result = r
+						} else {
+							result = fmt.Sprintf("User %s unblocked in filter and Telegram.", target)
+						}
+					} else {
+						_, _ = pluginSyscallJSON("tg.unblock_user", map[string]any{
+							"username": target,
+							"user_id":  args.UserID,
+							"chat_id":  args.ChatID,
+						})
+						result = fmt.Sprintf("User %s unblocked in filter and Telegram.", target)
+					}
+				} else if toolName == "deletechat" {
+					if owner != nil {
+						r, err := owner.CallTool(toolName, string(argsJSON))
+						if err == nil && r != "" {
+							result = r
+						} else {
+							result = "Chat history deleted for both users."
+						}
+					} else {
+						var args struct {
+							ChatID int64 `json:"chat_id"`
+						}
+						_ = json.Unmarshal([]byte(argsJSON), &args)
+						cid := args.ChatID
+						if cid == 0 {
+							cid = ev.ChatID
+						}
+						_, _ = pluginSyscallJSON("tg.delete_chat", map[string]any{
+							"chat_id": cid,
+						})
+						result = "Chat history deleted for both users."
+					}
+				} else if owner != nil {
+					if calls, actions, isMessageTool := messageToolParts(toolName, tc.Function.Arguments); isMessageTool {
+						// Message tools bypass the normal response parser, so
+						// markers such as |SPLIT| and |IMPORTANT| are handled here.
+						applyAIActions("", ev, actions)
+						field := messageToolTextFields[toolName]
+						target := deliveryTarget(toolName, tc.Function.Arguments)
+
+						// |VOICE| inside a message tool means: speak the text
+						// instead of sending a text bubble. Only do this for the
+						// current chat, otherwise the voice would go to the
+						// wrong destination.
+						voiceHandled := false
+						if len(calls) > 0 {
+							targetChat := ""
+							if cid, ok := calls[0]["chat_id"]; ok {
+								targetChat = formatChatID(cid)
+							}
+							sameChat := targetChat == "" || targetChat == strconv.FormatInt(ev.ChatID, 10)
+							if sameChat {
+								var voiceParts []string
+								for _, callArgs := range calls {
+									if t, _ := callArgs[field].(string); strings.TrimSpace(t) != "" {
+										voiceParts = append(voiceParts, t)
+									}
+								}
+								if vt, ok := voiceActionText(actions, voiceParts); ok {
+									if voiceErr := deliverVoiceReply(GetGlobalConfig(), ev, vt, ev.TopicID); voiceErr == nil {
+										for _, t := range voiceParts {
+											delivered.add(target, t)
+										}
+										result = `{"status":"ok","media":"voice"}`
+										voiceHandled = true
+									} else {
+										log.Warn("tool %s: voice synthesis failed, sending text: %v", toolName, voiceErr)
+									}
+								}
+							}
+						}
+
+						if !voiceHandled {
+							if len(calls) == 0 {
+								result = `{"status":"skipped"}`
+							} else {
+								outs := make([]string, 0, len(calls))
+								for _, callArgs := range calls {
+									text, _ := callArgs[field].(string)
+									if delivered.seen(target, text) {
+										log.Debug("tool %s: suppressing duplicate bubble in chat %d", toolName, ev.ChatID)
+										continue
+									}
+									b, _ := json.Marshal(callArgs)
+									r, callErr := owner.CallTool(toolName, string(b))
+									if callErr != nil {
+										result = fmt.Sprintf("ERROR: %v", callErr)
+										log.Error("tool %s execution error: %v", toolName, callErr)
+										outs = nil
+										break
+									}
+									if r == "" {
+										r = "null"
+									}
+									out := r
+									if toolResultOK(r) && strings.TrimSpace(text) != "" {
+										delivered.add(target, text)
+									}
+									outs = append(outs, out)
+								}
+								if outs != nil {
+									if len(outs) == 0 {
+										result = `{"status":"skipped","reason":"duplicate"}`
+									} else {
+										result = strings.Join(outs, "\n")
+									}
+								}
+							}
+						}
+					} else {
+						r, err := owner.CallTool(toolName, string(argsJSON))
+						if err != nil {
+							result = fmt.Sprintf("ERROR: %v", err)
+							log.Error("tool %s execution error: %v", toolName, err)
+						} else if r == "" {
+							result = "null"
+						} else {
+							result = r
+						}
+					}
 				} else {
-					result = r
+					result = "null"
 				}
 			} else {
 				result = fmt.Sprintf("ERROR: tool %q not found", toolName)
@@ -567,5 +1154,3 @@ func (t *tokenThrottle) flush(now time.Time) (string, bool) {
 	t.last = now
 	return out, true
 }
-
-

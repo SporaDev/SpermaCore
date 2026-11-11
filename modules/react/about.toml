@@ -1,0 +1,4 @@
+name = "react"
+llm_description = "react plugin"
+human_description = "react module"
+

@@ -1411,6 +1411,51 @@ func syscallDispatch(method, argsJSON string, outJSON *string) int {
 		}
 		return 0
 
+	case "tts.synthesize":
+		var req struct {
+			Text      string `json:"text"`
+			Voice     string `json:"voice"`
+			NoRewrite bool   `json:"no_rewrite"`
+		}
+		if err := json.Unmarshal([]byte(argsJSON), &req); err != nil {
+			return -2
+		}
+		cfg := GetGlobalConfig()
+		if cfg == nil {
+			if outJSON != nil {
+				*outJSON = `{"status":"error","reason":"config is not loaded"}`
+			}
+			return 0
+		}
+		local := *cfg
+		if req.Voice != "" {
+			local.TTS.Voice = req.Voice
+		}
+		if req.NoRewrite {
+			no := false
+			local.TTS.Rewrite = &no
+		}
+		speakable := ttsSpeakableText(&local, req.Text)
+		path, seconds, err := synthesizeVoiceNote(&local, speakable)
+		if err != nil {
+			if outJSON != nil {
+				b, _ := json.Marshal(map[string]any{"status": "error", "reason": err.Error()})
+				*outJSON = string(b)
+			}
+			return 0
+		}
+		if outJSON != nil {
+			b, _ := json.Marshal(map[string]any{
+				"status":   "ok",
+				"path":     path,
+				"duration": seconds,
+				"format":   local.TTS.Format,
+				"text":     speakable,
+			})
+			*outJSON = string(b)
+		}
+		return 0
+
 	case "transport.send":
 		var req struct {
 			Transport string `json:"transport"`
@@ -1426,12 +1471,32 @@ func syscallDispatch(method, argsJSON string, outJSON *string) int {
 			ChatID:    req.ChatID,
 			TopicID:   req.TopicID,
 		}
-		sentID, err := sendTextGetID(ev, req.Text, req.TopicID)
-		if err != nil {
+		parts, actions := splitAIResponse(req.Text)
+		applyAIActions("", ev, actions)
+		if vtxt, ok := voiceActionText(actions, parts); ok {
+			if err := deliverVoiceReply(GetGlobalConfig(), ev, vtxt, req.TopicID); err == nil {
+				if outJSON != nil {
+					*outJSON = `{"status":"ok","message_id":0,"media":"voice"}`
+				}
+				return 0
+			}
+		}
+		if len(parts) == 0 {
 			if outJSON != nil {
-				*outJSON = fmt.Sprintf(`{"status":"error","reason":%q}`, err.Error())
+				*outJSON = `{"status":"ok","message_id":0}`
 			}
 			return 0
+		}
+		var sentID int
+		for _, part := range parts {
+			id, err := sendTextGetID(ev, part, req.TopicID)
+			if err != nil {
+				if outJSON != nil {
+					*outJSON = fmt.Sprintf(`{"status":"error","reason":%q}`, err.Error())
+				}
+				return 0
+			}
+			sentID = id
 		}
 		if outJSON != nil {
 			*outJSON = fmt.Sprintf(`{"status":"ok","message_id":%d}`, sentID)

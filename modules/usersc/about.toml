@@ -1,0 +1,4 @@
+name = "usersc"
+llm_description = "usersc plugin"
+human_description = "usersc module"
+

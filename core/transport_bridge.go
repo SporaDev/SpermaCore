@@ -134,8 +134,9 @@ func sendPhotoViaTransport(ev transportEvent, path string, caption string, topic
 	return nil
 }
 
-// send voice note via transport
-func sendVoiceViaTransport(ev transportEvent, path string, caption string, topicID int) error {
+// send voice note via transport. duration is the audio length in seconds as
+// reported by the provider; Telegram uses it for the voice note header.
+func sendVoiceViaTransport(ev transportEvent, path string, caption string, topicID int, duration float64) error {
 	owner := resolveTransportOwner(ev.Transport)
 	if owner == nil || !owner.HasNativeTransport() || !owner.TransportSupports(transportCallMedia) {
 		return fmt.Errorf("transport %q does not support sending media", ev.Transport)
@@ -143,6 +144,39 @@ func sendVoiceViaTransport(ev transportEvent, path string, caption string, topic
 	fields := makeTransportPayload(ev, topicID)
 	fields["path"] = path
 	fields["media_type"] = "voice"
+	if duration > 0 {
+		fields["duration"] = duration
+	}
+	if caption != "" {
+		fields["caption"] = caption
+	}
+	resp, err := owner.TransportSendMedia(transportPayload(fields))
+	if err != nil {
+		return err
+	}
+	var parsed struct {
+		MessageID string `json:"message_id"`
+	}
+	if json.Unmarshal([]byte(resp), &parsed) == nil && parsed.MessageID != "" {
+		if id64, convErr := strconv.ParseInt(parsed.MessageID, 10, 64); convErr == nil {
+			rememberBotSentMessage(ev.ChatID, int(id64))
+		}
+	}
+	return nil
+}
+
+// send audio file via transport (used when send_as_voice = false)
+func sendAudioViaTransport(ev transportEvent, path string, caption string, topicID int, duration float64) error {
+	owner := resolveTransportOwner(ev.Transport)
+	if owner == nil || !owner.HasNativeTransport() || !owner.TransportSupports(transportCallMedia) {
+		return fmt.Errorf("transport %q does not support sending media", ev.Transport)
+	}
+	fields := makeTransportPayload(ev, topicID)
+	fields["path"] = path
+	fields["media_type"] = "audio"
+	if duration > 0 {
+		fields["duration"] = duration
+	}
 	if caption != "" {
 		fields["caption"] = caption
 	}
@@ -313,9 +347,18 @@ func telegramPruneOwnMessages(cutoffUnix int64) int {
 	return 0
 }
 
-func telegramStartQRLogin() error {
-	_, err := pluginSyscallJSON("tg.start_qr", map[string]any{})
+// startTransportQRLogin requests QR login from available transport plugins.
+// It dispatches generic syscall "transport.start_qr" and falls back to "tg.start_qr".
+func startTransportQRLogin() error {
+	_, err := pluginSyscallJSON("transport.start_qr", map[string]any{})
+	if err != nil {
+		_, err = pluginSyscallJSON("tg.start_qr", map[string]any{})
+	}
 	return err
+}
+
+func telegramStartQRLogin() error {
+	return startTransportQRLogin()
 }
 
 func telegramDownloadCustomEmoji(customEmojiID int64) (string, string, string, error) {

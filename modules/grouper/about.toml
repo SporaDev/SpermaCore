@@ -1,0 +1,3 @@
+name = "grouper"
+llm_description = "Message debouncing, aggregation pipeline hook, and multi-message burst consolidation"
+human_description = "Message grouper and debounce buffer module"

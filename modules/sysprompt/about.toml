@@ -1,0 +1,4 @@
+name = "sysprompt"
+llm_description = "sysprompt plugin"
+human_description = "sysprompt module"
+

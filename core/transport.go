@@ -58,6 +58,39 @@ func ingestEvent(eventJSON string) int {
 	return 0
 }
 
+// InlineButton describes one button of an inline keyboard attached to a
+// message. Data carries the raw base64 callback payload TDLib uses.
+type InlineButton struct {
+	Index    int    `json:"index,omitempty"`
+	Row      int    `json:"row,omitempty"`
+	Col      int    `json:"col,omitempty"`
+	Text     string `json:"text"`
+	Type     string `json:"type,omitempty"`
+	Data     string `json:"data,omitempty"`
+	DataText string `json:"data_text,omitempty"`
+	URL      string `json:"url,omitempty"`
+}
+
+// PollOption is one answer option of a Telegram poll. Index is the 0-based
+// option id used by the vote_poll tool.
+type PollOption struct {
+	Index      int    `json:"index"`
+	Text       string `json:"text"`
+	VoterCount int    `json:"voter_count,omitempty"`
+	IsChosen   bool   `json:"is_chosen,omitempty"`
+}
+
+// Poll describes a Telegram poll or quiz attached to an incoming message.
+type Poll struct {
+	Question              string       `json:"question"`
+	Options               []PollOption `json:"options"`
+	TotalVoters           int          `json:"total_voter_count,omitempty"`
+	IsAnonymous           bool         `json:"is_anonymous,omitempty"`
+	AllowsMultipleAnswers bool         `json:"allows_multiple_answers,omitempty"`
+	IsQuiz                bool         `json:"is_quiz,omitempty"`
+	IsClosed              bool         `json:"is_closed,omitempty"`
+}
+
 // incoming transport event
 type transportEvent struct {
 	Type           string `json:"type"`
@@ -77,6 +110,7 @@ type transportEvent struct {
 	Text           string `json:"text"`
 	MediaType      string `json:"media_type,omitempty"`
 	IsEdit         bool   `json:"is_edit,omitempty"`
+	Date           int64  `json:"date,omitempty"`
 
 	PhotoPath         string  `json:"photo_path,omitempty"`
 	CustomEmojiIDs    []int64 `json:"custom_emoji_ids,omitempty"`
@@ -85,8 +119,49 @@ type transportEvent struct {
 	StickerAccessHash int64   `json:"sticker_access_hash,omitempty"`
 	StickerFileRef    []byte  `json:"sticker_file_reference,omitempty"`
 	StickerFileID     int     `json:"sticker_file_id,omitempty"`
-	SemanticContext   string  `json:"-"`
-	Activation        string  `json:"-"`
+	StickerAnimated   bool    `json:"sticker_animated,omitempty"`
+	StickerThumbPath  string  `json:"sticker_thumb_path,omitempty"`
+	StickerWidth      int     `json:"sticker_width,omitempty"`
+	StickerHeight     int     `json:"sticker_height,omitempty"`
+
+	// Inline bot attribution and inline keyboards.
+	ViaBotID       int64          `json:"via_bot_id,omitempty"`
+	ViaBotName     string         `json:"via_bot_name,omitempty"`
+	ViaBotUsername string         `json:"via_bot_username,omitempty"`
+	Buttons        []InlineButton `json:"buttons,omitempty"`
+
+	// Poll/quiz attached to the message (media_type == "poll").
+	Poll *Poll `json:"poll,omitempty"`
+
+	// Callback query (a user pressed an inline button on one of our messages).
+	CallbackQueryID  int64  `json:"callback_query_id,omitempty"`
+	CallbackData     string `json:"callback_data,omitempty"`
+	CallbackDataText string `json:"callback_data_text,omitempty"`
+	ButtonText       string `json:"button_text,omitempty"`
+	IsCallback       bool   `json:"-"`
+
+	SemanticContext string `json:"-"`
+	InlineContext   string `json:"-"`
+	Activation      string `json:"-"`
+}
+
+// normalizeIngestEvent classifies an incoming plugin event and attaches the
+// inline context (bot attribution, keyboards, callback presses, invite links).
+// It reports false for events the core does not handle.
+func normalizeIngestEvent(ev transportEvent) (transportEvent, bool) {
+	switch ev.Type {
+	case "new_message", "edit_message":
+		if ev.Type == "edit_message" {
+			ev.IsEdit = true
+		}
+	case "callback_query":
+		ev.IsCallback = true
+		ev.Text = callbackEventText(ev)
+	default:
+		return ev, false
+	}
+	ev.InlineContext = inlineEventContext(ev)
+	return ev, true
 }
 
 // transport sink factory
@@ -97,16 +172,14 @@ func makeTransportSink(name string, addons []*LoadedAddon, provider LLMProvider,
 	gr := GlobalGrouper()
 
 	return func(eventJSON string) {
-		var ev transportEvent
-		if err := json.Unmarshal([]byte(eventJSON), &ev); err != nil {
+		var raw transportEvent
+		if err := json.Unmarshal([]byte(eventJSON), &raw); err != nil {
 			log.Error("[%s] bad event json: %v", name, err)
 			return
 		}
-		if ev.Type != "new_message" && ev.Type != "edit_message" {
+		ev, ok := normalizeIngestEvent(raw)
+		if !ok {
 			return
-		}
-		if ev.Type == "edit_message" {
-			ev.IsEdit = true
 		}
 		if ev.SelfUsername != "" {
 			RegisterBotUsername(ev.SelfUsername)
@@ -114,8 +187,8 @@ func makeTransportSink(name string, addons []*LoadedAddon, provider LLMProvider,
 		if ev.SelfName != "" {
 			RegisterBotName(ev.SelfName)
 		}
-		if ev.ChatID < 0 && isIgnoredUser(ev) {
-			log.Debug("[%s] ignored user=%s chat=%d", name, ev.SenderUsername, ev.ChatID)
+		if isIgnoredUser(ev) {
+			log.Debug("[%s] ignored blocked user=%s id=%d chat=%d", name, ev.SenderUsername, ev.SenderID, ev.ChatID)
 			return
 		}
 		if strings.TrimSpace(ev.Text) == "" && ev.MediaType == "" {
@@ -126,15 +199,17 @@ func makeTransportSink(name string, addons []*LoadedAddon, provider LLMProvider,
 			return
 		}
 
-		rememberIncomingMessage(ev)
-		extractFastUserFacts(cfg.Core.DataDir, ev)
+		if !ev.IsCallback {
+			rememberIncomingMessage(ev)
+			extractFastUserFacts(cfg.Core.DataDir, ev)
+		}
 
 		if gDash != nil {
 			gDash.TrackMessage()
 		}
 
 		// enrich with semantic context
-		if scEmbedsc.Enabled() && strings.TrimSpace(ev.Text) != "" {
+		if !ev.IsCallback && scEmbedsc.Enabled() && strings.TrimSpace(ev.Text) != "" {
 			if hits, err := scEmbedsc.Recall(ev.ChatID, ev.Text, 5); err == nil && len(hits) > 0 {
 				var contextLines []string
 				for _, hit := range hits {
@@ -157,7 +232,7 @@ func makeTransportSink(name string, addons []*LoadedAddon, provider LLMProvider,
 		}
 
 		// check group policy
-		if ev.ChatID < 0 {
+		if ev.ChatID < 0 && !ev.IsCallback {
 			respond, mode := groupShouldRespond(ev)
 			ev.Activation = mode
 			if !respond {
@@ -173,8 +248,8 @@ func makeTransportSink(name string, addons []*LoadedAddon, provider LLMProvider,
 			log.Debug("[%s] group respond chat=%d from=%s activation=%s", name, ev.ChatID, ev.SenderUsername, mode)
 		}
 
-		// grouper debounce
-		if gr != nil && gr.Enabled() {
+		// grouper debounce (callback presses are handled immediately)
+		if gr != nil && gr.Enabled() && !ev.IsCallback {
 			gr.Add(ev)
 			return
 		}
@@ -299,8 +374,8 @@ func sendViaPluginTransport(owner *LoadedAddon, ev transportEvent, text string, 
 	return firstErr
 }
 
-// send typing indicator
-func SendTypingViaTransport(ev transportEvent, topicID int) {
+// send a raw chat action to the transport
+func sendChatActionViaTransport(ev transportEvent, topicID int, action string) {
 	owner := transportOwner(ev.Transport)
 	if owner == nil || !owner.TransportSupports(transportCallTyping) || owner.TransportCapabilities()&transportCapTyping == 0 {
 		return
@@ -308,7 +383,7 @@ func SendTypingViaTransport(ev transportEvent, topicID int) {
 	base := map[string]any{
 		"chat_id":   strconv.FormatInt(ev.ChatID, 10),
 		"transport": ev.Transport,
-		"action":    "typing",
+		"action":    action,
 	}
 	if topicID > 0 {
 		base["topic_id"] = topicID
@@ -316,6 +391,16 @@ func SendTypingViaTransport(ev transportEvent, topicID int) {
 	go func() {
 		_, _ = owner.TransportTyping(transportPayload(base))
 	}()
+}
+
+// send typing indicator
+func SendTypingViaTransport(ev transportEvent, topicID int) {
+	sendChatActionViaTransport(ev, topicID, "typing")
+}
+
+// cancel the current typing indicator so it does not linger after the reply
+func SendTypingCancelViaTransport(ev transportEvent, topicID int) {
+	sendChatActionViaTransport(ev, topicID, "cancel")
 }
 
 // send recording voice indicator

@@ -1,4 +1,4 @@
-# spermacore v1.9.0 - minimal config
+# spermacore v1.9.0 - minimal production config
 
 [core]
 data_dir = "./data"
@@ -8,7 +8,12 @@ db_key = "${SPERMACORE_DB_KEY}"
 
 [llm]
 provider = "openrouter"
-model = "google/gemma-4-26b-a4b-it:free"
+model = "z-ai/glm-5.3-flash"
+vision_model = "google/gemini-2.0-flash"
+
+[llm.routing.vision]
+provider = "openrouter"
+model = "google/gemini-2.0-flash"
 
 [llm.providers.openrouter]
 base_url = "https://openrouter.ai/api/v1"
@@ -41,7 +46,7 @@ load = [
   "media",
   "dashboard",
   "grouper",
-  "bypasses",
+  "moderation"
 ]
 
 [plugins.bypasses]
@@ -50,13 +55,13 @@ tgwsproxy = true
 
 [plugins.telegram]
 enabled = true
-api_id = 33558968
+api_id = "${SPERMACORE_TELEGRAM_API_ID}"
 api_hash = "${SPERMACORE_TELEGRAM_API_HASH}"
 phone = "${SPERMACORE_TELEGRAM_PHONE}"
 login_mode = "qr"
 reply_to = true
-device_model = "iPhone 16 Pro"
-app_version = "13.1.1"
+device_model = "Desktop"
+app_version = "1.0.0"
 database_encryption_key = "${SPERMACORE_TELEGRAM_DB_KEY}"
 
 [plugins.agentloop]
@@ -69,7 +74,7 @@ max_per_day = 10
 
 [memory]
 enabled = true
-embedding_model = "liquid/lfm-2.5-embedding-350m:free"
+embedding_model = "google/gemini-embedding-2"
 max_rag_results = 5
 similarity_threshold = 0.72
 index_type = "hnsw"
@@ -79,16 +84,16 @@ hnsw_ef_search = 32
 
 [humanify]
 enabled = true
-delay_min_ms = 1200
-delay_max_ms = 3500
-typo_chance_percent = 40
+delay_min_ms = 1000
+delay_max_ms = 3000
+typo_chance_percent = 30
 auto_fix_typo = true
-distraction_chance = 0.08
-distraction_max_ms = 6000
+distraction_chance = 0.05
+distraction_max_ms = 4000
 reply_probability = 0.35
 split_long = true
 split_parts = 3
-split_pause_ms = 2200
+split_pause_ms = 2000
 split_threshold = 200
 typing_jitter = 0.3
 typo_max = 1
@@ -107,4 +112,16 @@ priority1_chance = 0.12
 priority2_chance = 0.55
 priority3_always_reply = true
 
+[context]
+enabled = true
+max_age_minutes = 360
+max_chars = 240
+recent_messages = 12
 
+[grouper]
+enabled = true
+grouper_time = "1.5s"
+groups_only = false
+joiner = "\n"
+max_wait_ms = 10000
+window_ms = 1500

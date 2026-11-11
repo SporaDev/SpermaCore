@@ -1,0 +1,3 @@
+name = "mediademo"
+llm_description = "media format demo event bus"
+human_description = "demo: registering media formats via event bus (abi 1.5)"

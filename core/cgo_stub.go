@@ -100,34 +100,34 @@ func (a *LoadedAddon) GetTools() ([]map[string]any, error) {
 	return nil, errNativeAddonsUnavailable
 }
 
-func (a *LoadedAddon) OnStartup() int                      { return 0 }
-func (a *LoadedAddon) OnConfigReload(string) int           { return 0 }
-func (a *LoadedAddon) NotifyConfigVersion(uint32)          {}
-func (a *LoadedAddon) GetSystemPrompt() (string, error)    { return "", nil }
-func (a *LoadedAddon) deinit() int                         { return 0 }
-func (a *LoadedAddon) Unload()                             {}
+func (a *LoadedAddon) OnStartup() int                   { return 0 }
+func (a *LoadedAddon) OnConfigReload(string) int        { return 0 }
+func (a *LoadedAddon) NotifyConfigVersion(uint32)       {}
+func (a *LoadedAddon) GetSystemPrompt() (string, error) { return "", nil }
+func (a *LoadedAddon) deinit() int                      { return 0 }
+func (a *LoadedAddon) Unload()                          {}
 func (a *LoadedAddon) onShutdown() int {
 	if a.supervisor != nil {
 		a.supervisor.Stop()
 	}
 	return 0
 }
-func (a *LoadedAddon) HealthCheckEnhanced() string         { return "" }
-func (a *LoadedAddon) HookNames() []string                 { return nil }
-func (a *LoadedAddon) Widgets() []*WidgetInfo              { return nil }
-func (w *WidgetInfo) Render() string                       { return "" }
-func (w *WidgetInfo) Update() string                       { return "" }
-func (w *WidgetInfo) Click(payload string) string          { return "" }
+func (a *LoadedAddon) HealthCheckEnhanced() string { return "" }
+func (a *LoadedAddon) HookNames() []string         { return nil }
+func (a *LoadedAddon) Widgets() []*WidgetInfo      { return nil }
+func (w *WidgetInfo) Render() string               { return "" }
+func (w *WidgetInfo) Update() string               { return "" }
+func (w *WidgetInfo) Click(payload string) string  { return "" }
 
 func (a *LoadedAddon) UpdateWidget(id string) string         { return "" }
 func (a *LoadedAddon) ClickWidget(id, payload string) string { return "" }
 
 // transport methods for sidecar runners
-func (a *LoadedAddon) TransportNameResolved() string    { return a.TransportName }
-func (a *LoadedAddon) TransportDisplayName() string     { return a.Name }
-func (a *LoadedAddon) TransportDescription() string     { return a.Desc }
-func (a *LoadedAddon) TransportCapabilities() uint32    { return 0xFFFFFFFF }
-func (a *LoadedAddon) TransportMaxTextLen() int         { return 4096 }
+func (a *LoadedAddon) TransportNameResolved() string { return a.TransportName }
+func (a *LoadedAddon) TransportDisplayName() string  { return a.Name }
+func (a *LoadedAddon) TransportDescription() string  { return a.Desc }
+func (a *LoadedAddon) TransportCapabilities() uint32 { return 0xFFFFFFFF }
+func (a *LoadedAddon) TransportMaxTextLen() int      { return 4096 }
 func (a *LoadedAddon) HasNativeTransport() bool {
 	return a.supervisor != nil && a.TransportName != ""
 }
@@ -363,3 +363,8 @@ func hookToolCall(tool, args string) (string, bool)                      { retur
 func hookToolResult(tool, result string) string                          { return "" }
 func bumpConfigVersion()                                                 {}
 func startConfigWatch(log *Logger)                                       {}
+
+// Non-cgo builds have no plugin bridge, so there is no global provider or
+// config registered by the C side. TTS falls back to plain text without them.
+func GetGlobalProvider() LLMProvider { return nil }
+func GetGlobalConfig() *Config       { return nil }

@@ -20,12 +20,65 @@ type StickerRecord struct {
 	FileReference []byte    `json:"file_reference,omitempty"`
 	FileID        int       `json:"file_id,omitempty"`
 	Emoji         string    `json:"emoji,omitempty"`
+	Width         int       `json:"width,omitempty"`
+	Height        int       `json:"height,omitempty"`
 	Description   string    `json:"description"`
 	File          string    `json:"file,omitempty"`
 	UpdatedAt     time.Time `json:"updated_at"`
 }
 
 var stickerStoreMu sync.Mutex
+
+func findStickerIn(paths []string, id string) *StickerRecord {
+	if strings.TrimSpace(id) == "" {
+		return nil
+	}
+	for _, path := range paths {
+		var items []StickerRecord
+		if b, e := os.ReadFile(path); e == nil && json.Unmarshal(b, &items) == nil {
+			for i := range items {
+				item := items[i]
+				if item.ID == id {
+					return &item
+				}
+				if item.DocumentID != 0 && strconv.FormatInt(item.DocumentID, 10) == id {
+					return &item
+				}
+				if fmt.Sprintf("%d:%d", item.ChatID, item.MessageID) == id {
+					return &item
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// FindSticker returns a catalogued sticker record by its internal ID.
+func FindSticker(dataDir string, id string) *StickerRecord {
+	return findStickerIn(stickerStorePaths(dataDir), id)
+}
+
+// LoadStickers returns every catalogued sticker record, de-duplicated by ID.
+func LoadStickers(dataDir string) []StickerRecord {
+	var all []StickerRecord
+	seen := map[string]bool{}
+	for _, path := range stickerStorePaths(dataDir) {
+		var items []StickerRecord
+		if b, e := os.ReadFile(path); e == nil && json.Unmarshal(b, &items) == nil {
+			for _, item := range items {
+				key := item.ID
+				if key == "" {
+					key = fmt.Sprintf("%d:%d", item.ChatID, item.MessageID)
+				}
+				if !seen[key] {
+					all = append(all, item)
+					seen[key] = true
+				}
+			}
+		}
+	}
+	return all
+}
 
 func RememberSticker(dataDir string, r StickerRecord) {
 	if strings.TrimSpace(r.Description) == "" {

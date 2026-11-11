@@ -4,11 +4,14 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -23,6 +26,7 @@ type ChatMessage struct {
 	Content    string         `json:"content"`
 	Images     []string       `json:"images,omitempty"`
 	Videos     []string       `json:"videos,omitempty"`
+	Audios     []string       `json:"audios,omitempty"`
 	Thinking   string         `json:"thinking,omitempty"`
 	ToolCalls  []ChatToolCall `json:"tool_calls,omitempty"`
 	ToolCallID string         `json:"tool_call_id,omitempty"`
@@ -124,6 +128,9 @@ func (p *OllamaProvider) streamInternal(ctx context.Context, model string, messa
 		}
 		if len(m.Videos) > 0 {
 			msg["videos"] = m.Videos
+		}
+		if len(m.Audios) > 0 {
+			msg["audios"] = m.Audios
 		}
 		if len(m.ToolCalls) > 0 {
 			tcs := make([]map[string]any, 0, len(m.ToolCalls))
@@ -341,8 +348,8 @@ func (p *OpenAIProvider) streamInternal(ctx context.Context, model string, messa
 	rawMessages := make([]map[string]any, 0, len(messages))
 	for _, m := range messages {
 		var content any
-		if len(m.Images) > 0 {
-			parts := make([]map[string]any, 0, len(m.Images)+1)
+		if len(m.Images) > 0 || len(m.Videos) > 0 || len(m.Audios) > 0 {
+			parts := make([]map[string]any, 0, len(m.Images)+len(m.Videos)+len(m.Audios)+1)
 			if m.Content != "" {
 				parts = append(parts, map[string]any{"type": "text", "text": m.Content})
 			}
@@ -354,15 +361,31 @@ func (p *OpenAIProvider) streamInternal(ctx context.Context, model string, messa
 					},
 				})
 			}
+			for _, vid := range m.Videos {
+				if url, ok := fileToDataURL(vid); ok {
+					parts = append(parts, map[string]any{
+						"type":      "video_url",
+						"video_url": map[string]any{"url": url},
+					})
+				}
+			}
+			for _, aud := range m.Audios {
+				if b64, format, ok := fileToAudioBase64(aud); ok {
+					parts = append(parts, map[string]any{
+						"type": "input_audio",
+						"input_audio": map[string]any{
+							"data":   b64,
+							"format": format,
+						},
+					})
+				}
+			}
 			content = parts
 		} else {
 			content = m.Content
 		}
 
 		msg := map[string]any{"role": m.Role, "content": content}
-		if len(m.Videos) > 0 {
-			msg["videos"] = m.Videos
-		}
 		if len(m.ToolCalls) > 0 {
 			tcs := make([]map[string]any, 0, len(m.ToolCalls))
 			for _, tc := range m.ToolCalls {
@@ -726,10 +749,10 @@ func (r *ProviderRouter) resolve(model string) (LLMProvider, string) {
 		if name == "ollama" {
 			return r.def, strings.TrimLeft(model[i+1:], "/")
 		}
-		if r.defModel != "" {
-			return r.def, r.defModel
-		}
-		return r.def, strings.TrimLeft(model[i+1:], "/")
+		// Not a configured provider: the leading segment is part of the model
+		// id itself (e.g. "google/gemini-2.0-flash"). Forward the full string
+		// to the default provider instead of silently replacing it.
+		return r.def, model
 	}
 	return r.def, model
 }
@@ -755,4 +778,77 @@ func (r *ProviderRouter) ChatStream(ctx context.Context, model string, messages 
 		out <- StreamChunk{Delta: msg.Content, ToolCalls: msg.ToolCalls, Done: true}
 	}()
 	return out
+}
+
+// mediaMimeTypeForPath maps a file extension to a MIME type for multimodal
+// content parts (video, image, audio).
+func mediaMimeTypeForPath(path string) string {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".mp4", ".m4v":
+		return "video/mp4"
+	case ".webm":
+		return "video/webm"
+	case ".mov":
+		return "video/quicktime"
+	case ".mkv":
+		return "video/x-matroska"
+	case ".avi":
+		return "video/x-msvideo"
+	case ".gif":
+		return "image/gif"
+	case ".ogg", ".oga":
+		return "audio/ogg"
+	case ".opus":
+		return "audio/opus"
+	case ".mp3":
+		return "audio/mpeg"
+	case ".wav":
+		return "audio/wav"
+	case ".m4a":
+		return "audio/mp4"
+	case ".flac":
+		return "audio/flac"
+	case ".jpg", ".jpeg":
+		return "image/jpeg"
+	case ".png":
+		return "image/png"
+	case ".webp":
+		return "image/webp"
+	}
+	return "application/octet-stream"
+}
+
+// fileToDataURL reads a local media file and encodes it as a data URL. Remote
+// URLs and already-encoded data URLs are passed through untouched.
+func fileToDataURL(path string) (string, bool) {
+	if strings.HasPrefix(path, "http://") || strings.HasPrefix(path, "https://") || strings.HasPrefix(path, "data:") {
+		return path, true
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", false
+	}
+	return "data:" + mediaMimeTypeForPath(path) + ";base64," + base64.StdEncoding.EncodeToString(data), true
+}
+
+// fileToAudioBase64 reads a local audio file and returns base64 plus the short
+// format token expected by OpenAI-compatible input_audio content parts.
+func fileToAudioBase64(path string) (string, string, bool) {
+	if strings.HasPrefix(path, "data:") {
+		if i := strings.IndexByte(path, ','); i > 0 {
+			return path[i+1:], "wav", true
+		}
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", "", false
+	}
+	ext := strings.TrimPrefix(strings.ToLower(filepath.Ext(path)), ".")
+	if ext == "oga" {
+		ext = "ogg"
+	}
+	if ext == "" {
+		ext = "wav"
+	}
+	return base64.StdEncoding.EncodeToString(data), ext, true
 }

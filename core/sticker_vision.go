@@ -4,11 +4,39 @@ import (
 	"context"
 	"encoding/base64"
 	"os"
+	"path/filepath"
 	"strings"
+
+	"spermacore/core/media"
 )
 
 func describeSticker(ctx context.Context, path string, provider LLMProvider, cfg *Config, log *Logger) string {
-	b, err := os.ReadFile(path)
+	if strings.TrimSpace(path) == "" {
+		return ""
+	}
+	ext := strings.ToLower(filepath.Ext(path))
+	// Telegram Lottie stickers cannot be decoded without a dedicated renderer.
+	if ext == ".tgs" {
+		log.Debug("sticker vision: skipping lottie sticker %s", path)
+		return ""
+	}
+	imagePath := path
+	// Animated stickers (webm) and stray videos have no direct image stream;
+	// describe their first frame instead.
+	switch ext {
+	case ".webm", ".mp4", ".mov", ".mkv", ".gif":
+		frames, err := media.AnalyzeVideoFrames(ctx, path)
+		if err != nil || len(frames) == 0 {
+			if err != nil {
+				log.Warn("sticker vision: frame extraction for %s: %v", path, err)
+			}
+			return ""
+		}
+		defer os.RemoveAll(filepath.Dir(frames[0]))
+		imagePath = frames[0]
+	}
+
+	b, err := os.ReadFile(imagePath)
 	if err != nil {
 		return ""
 	}

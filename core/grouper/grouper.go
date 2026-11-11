@@ -23,13 +23,22 @@ type Event struct {
 	SelfName                                    string
 	SelfID                                      int64
 	Text, MediaType, PhotoPath                  string
+	Date                                        int64
 	CustomEmojiIDs                              []int64
 	StickerID, StickerEmoji                     string
 	StickerAccessHash                           int64
 	StickerFileRef                              []byte
 	StickerFileID                               int
+	StickerAnimated                             bool
+	StickerThumbPath                            string
+	StickerWidth                                int
+	StickerHeight                               int
 	SemanticContext                             string
 	Activation                                  string
+	InlineContext                               string
+	// PollJSON carries the poll/quiz attached to the last message of the group
+	// (JSON encoded so the grouper package stays independent of core types).
+	PollJSON string
 }
 type buffer struct {
 	texts            []string
@@ -81,6 +90,12 @@ func (g *Grouper) Enabled() bool {
 func eventLine(e Event) string {
 	text := strings.TrimSpace(e.Text)
 	if text == "" {
+		return text
+	}
+	// Private chats are a single conversation; the speaker is obvious, so do
+	// not decorate the text with a sender prefix. Group chats (negative ids)
+	// keep the prefix to distinguish participants.
+	if e.ChatID > 0 {
 		return text
 	}
 	who := strings.TrimSpace(e.SenderName)
@@ -178,8 +193,10 @@ func (g *Grouper) flushChat(key bufferKey) {
 		b.last.CustomEmojiIDs = b.customEmojiIDs
 	}
 	if len(b.texts) > 1 {
-		b.last.SenderName = "group participants"
-		b.last.SenderUsername = ""
+		if b.last.ChatID < 0 {
+			b.last.SenderName = "group participants"
+			b.last.SenderUsername = ""
+		}
 		if !b.hasReplyFromSelf {
 			b.last.ReplyToID = 0
 		}

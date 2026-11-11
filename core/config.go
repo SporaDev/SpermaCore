@@ -18,6 +18,8 @@ type Config struct {
 	Core    CoreConfig    `toml:"core"`
 	LLM     LLMConfig     `toml:"llm"`
 	Memory  MemoryConfig  `toml:"memory"`
+	TTS     TTSConfig     `toml:"tts"`
+	Call    CallConfig    `toml:"call"`
 	Plugins PluginsConfig `toml:"plugins"`
 
 	// custom plugin sections passed via config_get_*
@@ -95,6 +97,65 @@ func (m MemoryConfig) IsEnabled() bool {
 		return true
 	}
 	return *m.Enabled
+}
+
+// TTSConfig controls text-to-speech synthesis. The default provider is
+// Fish Audio; any OpenAI-compatible /audio/speech endpoint also works.
+type TTSConfig struct {
+	Enabled *bool `toml:"enabled"`
+	// provider is "fishaudio" (default) or "openai".
+	Provider string `toml:"provider"`
+	// base_url overrides the provider endpoint. Fish Audio uses
+	// https://api.fish.audio, OpenAI-compatible APIs use the .../v1 root.
+	BaseURL string `toml:"base_url"`
+	APIKey  string `toml:"api_key"`
+	// model is provider specific: Fish Audio model header ("s1") or the
+	// OpenAI speech model.
+	Model string `toml:"model"`
+	// voice is the Fish Audio reference_id or the OpenAI voice name.
+	Voice string `toml:"voice"`
+	// format is the requested container: opus (default), mp3 or wav.
+	Format string `toml:"format"`
+	// speed multiplier (1.0 = normal) and volume in dB for Fish Audio.
+	Speed  float64 `toml:"speed"`
+	Volume float64 `toml:"volume"`
+	// language hint, e.g. "ru" or "auto".
+	Language string `toml:"language"`
+	// prompt rewrites the reply into speech-friendly text before synthesis.
+	// Empty means the built-in Russian prompt is used.
+	Prompt string `toml:"prompt"`
+	// max_chars truncates the text passed to the provider.
+	MaxChars int `toml:"max_chars"`
+	// send_as_voice sends the result as a Telegram voice note (ГС).
+	SendAsVoice *bool `toml:"send_as_voice"`
+	Rewrite     *bool `toml:"rewrite"`
+	TimeoutSecs int   `toml:"timeout_seconds"`
+}
+
+// IsEnabled reports whether TTS is enabled (default: true).
+func (t TTSConfig) IsEnabled() bool {
+	if t.Enabled == nil {
+		return true
+	}
+	return *t.Enabled
+}
+
+// ShouldSendAsVoice reports whether the audio must be delivered as a voice
+// note (default: true).
+func (t TTSConfig) ShouldSendAsVoice() bool {
+	if t.SendAsVoice == nil {
+		return true
+	}
+	return *t.SendAsVoice
+}
+
+// ShouldRewrite reports whether the reply should be rewritten with the TTS
+// prompt before synthesis (default: true).
+func (t TTSConfig) ShouldRewrite() bool {
+	if t.Rewrite == nil {
+		return true
+	}
+	return *t.Rewrite
 }
 
 type PluginsConfig struct {
@@ -199,7 +260,8 @@ func extractPluginSections(root map[string]any) map[string]map[string]any {
 func extractRootSections(root map[string]any) map[string]map[string]any {
 	out := make(map[string]map[string]any)
 	reserved := map[string]bool{
-		"core": true, "llm": true, "memory": true, "plugins": true,
+		"core": true, "llm": true, "memory": true, "tts": true, "call": true,
+		"plugins": true,
 	}
 	for name, v := range root {
 		if reserved[name] {
@@ -252,6 +314,45 @@ func (c *Config) applyDefaults() {
 	if c.Memory.HNSWEfSearch <= 0 {
 		c.Memory.HNSWEfSearch = 32
 	}
+
+	if c.TTS.Provider == "" {
+		c.TTS.Provider = "fishaudio"
+	}
+	c.TTS.Provider = strings.ToLower(strings.TrimSpace(c.TTS.Provider))
+	if c.TTS.BaseURL == "" {
+		switch c.TTS.Provider {
+		case "openai":
+			c.TTS.BaseURL = "https://api.openai.com/v1"
+		default:
+			c.TTS.BaseURL = "https://api.fish.audio"
+		}
+	}
+	if c.TTS.Model == "" {
+		if c.TTS.Provider == "openai" {
+			c.TTS.Model = "gpt-4o-mini-tts"
+		} else {
+			c.TTS.Model = "s1"
+		}
+	}
+	if c.TTS.Format == "" {
+		c.TTS.Format = "opus"
+	}
+	c.TTS.Format = strings.ToLower(strings.TrimSpace(c.TTS.Format))
+	if c.TTS.Speed <= 0 {
+		c.TTS.Speed = 1.0
+	}
+	if c.TTS.MaxChars <= 0 {
+		c.TTS.MaxChars = 900
+	}
+	if c.TTS.TimeoutSecs <= 0 {
+		c.TTS.TimeoutSecs = 60
+	}
+	if c.TTS.Language == "" {
+		c.TTS.Language = "auto"
+	}
+
+	c.Call.applyDefaults()
+
 	if c.LLM.Models == nil {
 		c.LLM.Models = map[string]string{}
 	}
@@ -349,6 +450,12 @@ func (c *Config) splitModelRoute(raw string) (provider, model string) {
 }
 
 // returns model routing string for given role
+//
+// The result is provider-qualified only when the role explicitly configures a
+// provider. Unqualified models are resolved against the default provider by
+// ProviderRouter.resolve(), which forwards unknown slash-prefixed names (for
+// example "google/gemini-2.0-flash") verbatim instead of treating the leading
+// segment as a provider and silently falling back to the default model.
 func (c *Config) ModelFor(role string) string {
 	role = strings.ToLower(role)
 	if r, ok := c.LLM.Routing[role]; ok {

@@ -242,7 +242,13 @@ func isIgnoredUser(ev transportEvent) bool {
 	groupPolicyMu.RLock()
 	defer groupPolicyMu.RUnlock()
 	username := normalizeUser(ev.SenderUsername)
-	return username != "" && groupPolicyState.IgnoredUsers[username]
+	if username != "" && groupPolicyState.IgnoredUsers[username] {
+		return true
+	}
+	if ev.SenderID != 0 && groupPolicyState.IgnoredUsers[fmt.Sprintf("id:%d", ev.SenderID)] {
+		return true
+	}
+	return false
 }
 
 func setUserIgnored(username string, ignored bool) {
