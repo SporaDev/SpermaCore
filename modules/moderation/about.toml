@@ -1,3 +1,0 @@
-name = "moderation"
-llm_description = "User blocking and chat deletion tools (block, unblock, deletechat)"
-human_description = "Telegram moderation tools: account-level block, unblock, and two-way chat deletion"

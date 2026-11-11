@@ -1,3 +1,0 @@
-name = "agentloop"
-llm_description = "Autonomous agent loop controls, countdown timer and status"
-human_description = "Agent loop manager and WebUI widget"

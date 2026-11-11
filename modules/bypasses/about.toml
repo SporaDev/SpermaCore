@@ -1,3 +1,0 @@
-name = "bypasses"
-llm_description = "Network bypass and proxy manager: Telegram WS/MTProto/SOCKS5 proxy routing and connection watchdog"
-human_description = "Network bypass and proxy module"

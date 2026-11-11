@@ -36,3 +36,6 @@ third_party/
 # Local tooling / крупные бинарные артефакты
 claude.exe
 .opencode/skills/skills.7z
+
+# Distributed modules (unpacked from releases/modules.zip)
+modules/
