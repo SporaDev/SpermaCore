@@ -353,16 +353,18 @@ func worker(id int, log *Logger) {
 			}
 		}
 
-		// Call mode: inside a voice call the user's voice notes are transcribed
-		// with the configured STT model, so the model reads text instead of
-		// attaching raw audio.
-		if callSessionActive(task.ev.ChatID) && task.ev.PhotoPath != "" &&
-			(task.ev.MediaType == "voice" || task.ev.MediaType == "audio") {
+		// Voice transcription: transcribe incoming voice messages and audio files
+		// so the model reads the recognized text instead of attaching raw audio.
+		if task.ev.PhotoPath != "" && (task.ev.MediaType == "voice" || task.ev.MediaType == "audio") {
 			if tr, trErr := transcribeAudioFile(task.cfg, task.ev.PhotoPath); trErr != nil {
-				task.log.Warn("[worker %d] call transcription failed: %v", id, trErr)
+				task.log.Warn("[worker %d] voice transcription failed: %v", id, trErr)
 			} else if strings.TrimSpace(tr) != "" {
-				task.log.Info("[worker %d] call transcription: %.120q", id, tr)
-				task.ev.Text = strings.TrimSpace(tr)
+				task.log.Info("[worker %d] voice transcription: %.120q", id, tr)
+				if strings.TrimSpace(task.ev.Text) != "" {
+					task.ev.Text = strings.TrimSpace(task.ev.Text) + "\n" + strings.TrimSpace(tr)
+				} else {
+					task.ev.Text = strings.TrimSpace(tr)
+				}
 				task.ev.PhotoPath = ""
 				task.ev.MediaType = ""
 			}
@@ -461,13 +463,14 @@ func worker(id int, log *Logger) {
 		// |VOICE| asks for the reply as a voice note (ГС). The duration comes
 		// from the synthesized audio itself, so the voice note header matches
 		// what the provider actually returned.
-		if len(parts) > 0 {
-			if voiceText, ok := voiceActionText(actions, parts); ok {
-				if voiceErr := deliverVoiceReply(task.cfg, task.ev, voiceText, topicID); voiceErr != nil {
-					task.log.Warn("[worker %d] voice reply failed, falling back to text: %v", id, voiceErr)
-				} else {
-					parts = nil
+		if voiceText, ok := voiceActionText(actions, parts); ok {
+			if voiceErr := deliverVoiceReply(task.cfg, task.ev, voiceText, topicID); voiceErr != nil {
+				task.log.Warn("[worker %d] voice reply failed, falling back to text: %v", id, voiceErr)
+				if len(parts) == 0 {
+					parts = []string{voiceText}
 				}
+			} else {
+				parts = nil
 			}
 		}
 
