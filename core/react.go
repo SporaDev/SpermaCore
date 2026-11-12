@@ -38,6 +38,7 @@ voice notes: append |VOICE| to your reply to send it as a voice message (ГС) i
 premium reactions: react(..., emoji="custom:<id>") sets a Telegram Premium custom emoji reaction; ids come from list_custom_emojis or emoji.json.
 calls: call(action="start") starts a voice call (spoken greeting, incoming voice is transcribed, all answers are voiced automatically), call(action="end") hangs up, call(action="status") reports the state. Only start a call when the user asks for one.
 polls: if the current message is a Telegram poll or quiz, its question and options are listed with 0-based ids. Vote with vote_poll(chat_id, message_id, option_ids=[...]) when it fits or the user asks; never vote on a closed poll.
+media & photos: when the user sends a photo, video, or sticker, treat it as a natural conversational share. Look at what is shown and react naturally according to your persona and conversational context (comment on what is happening, express emotion, joke, or react with an emoji). NEVER give a dry, robotic, machine-like description of what is in the photo (e.g. 'На этой фотографии изображен...' or 'In this photo there is...') unless the user explicitly asked you to describe it (e.g. 'опиши фото', 'что на картинке?').
 empty answers: if there is nothing meaningful to say, call ignore. Never send "(empty)".`
 
 var errIgnoreMessage = errors.New("message ignored by model")
@@ -283,24 +284,22 @@ func stampHistory(text string, at time.Time) string {
 }
 
 // mediaPromptText returns the text paired with an incoming media message,
-// synthesising a short prompt when the user sent media without a caption.
+// synthesising a natural conversational prompt when media arrives without a caption.
 func mediaPromptText(ev transportEvent) string {
 	if t := strings.TrimSpace(ev.Text); t != "" {
 		return t
 	}
 	switch ev.MediaType {
 	case "photo":
-		return "what is in this photo?"
+		return "[Photo attached. React naturally in conversation to what you see. Do not output a robotic image description.]"
 	case "gif", "video":
-		return "what is happening in this video?"
+		return "[Video attached. React naturally in conversation to what is shown. Do not output a robotic description.]"
 	case "video_msg":
-		return "what is happening in this video message?"
-	case "animated_sticker":
-		return "what does this animated sticker express?"
-	case "sticker":
-		return "what does this sticker express?"
+		return "[Video message (кружочек) attached. React naturally to what is shown and said.]"
+	case "animated_sticker", "sticker":
+		return "[Sticker attached. React naturally in conversation.]"
 	case "voice", "audio":
-		return "what is said in this voice message?"
+		return "[Voice message attached. React naturally to what is said.]"
 	}
 	return ev.Text
 }
