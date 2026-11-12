@@ -97,9 +97,7 @@ func callConfigFor(cfg *Config) CallConfig {
 	return cc
 }
 
-// ---------------------------------------------------------------------
 // sessions
-// ---------------------------------------------------------------------
 
 type callSession struct {
 	ChatID  int64
@@ -237,9 +235,7 @@ func handleCallTool(ev transportEvent, argsJSON string, log *Logger) (result str
 	return fmt.Sprintf(`{"status":"error","reason":"unknown call action %q"}`, action), ""
 }
 
-// ---------------------------------------------------------------------
 // speech recognition
-// ---------------------------------------------------------------------
 
 // transcribeAudioFile sends an audio file to an OpenAI-compatible
 // /audio/transcriptions endpoint and returns the recognized text.

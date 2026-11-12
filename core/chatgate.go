@@ -64,7 +64,6 @@ func (g *ChatGate) Release() {
 	select {
 	case g.sem <- struct{}{}:
 	default:
-		// already available (defensive)
 	}
 }
 

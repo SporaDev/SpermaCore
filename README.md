@@ -1,153 +1,116 @@
 # SpermaCore
 
-Modular runtime for personal LLM bots and userbots written in Go and C++20.
+Modular, crash-resilient runtime for autonomous LLM agents and Telegram userbots written in Go 1.22+ and C++20.
 
 [Russian version](README.ru.md) | [English version](README.md)
 
 ---
 
-## What is this
+## Overview
 
-SpermaCore is a lightweight runtime engine for running autonomous LLM agents and Telegram userbots. 
+SpermaCore is an agent engine designed around strict separation of concerns. Instead of stuffing prompt handling, memory indexes, and client protocols into an unmaintainable monolith, the runtime divides responsibilities between two layers:
 
-Instead of hardcoding prompts, agent loops, and messanger protocols into one big monolith, SpermaCore separates them:
-* Core (Go): worker pool, task queue, event bus, LLM routing (OpenRouter, Groq, Ollama), SQLite storage, and a real-time WebUI dashboard on port 8080.
-* Modules (C++20 dynamic libraries): Telegram TDLib transport, long-term vector memory (HNSW / RAG), autonomous initiative loops, media analysis, and custom tools.
+* **Core Runtime (Go 1.22+)**: Non-blocking event loop, worker goroutines pool, multi-provider LLM routing (OpenRouter, Groq, Ollama, Gemini Vision), SQLCipher-encrypted SQLite store, and a local WebUI dashboard on port 8080.
+* **Native Modules (C++20 Shared Libraries)**: High-performance modules compiled against a stable C ABI (`include/plugin_api.h`). Includes TDLib transport, long-term HNSW vector memory (`embedsc`), proactive background reflection loop (`agentloop`), media/sticker vision, message grouping, and web search.
 
-If a module fails or is not installed, the core stays alive and falls back to safe mode.
+If a C++ module crashes or fails to load, the Go core catches the fault, marks the worker degraded, and continues serving requests in safe mode without dropping client sessions.
 
 ---
 
-## Installing Modules
+## Architecture & ABI (1.7.1)
 
-C++ modules are packaged into `releases/modules.zip` to keep the main repository lightweight.
-
-### 1. Extract the archive
-Unpack `releases/modules.zip` into the root directory of the project:
-
-```bash
-# On Linux / macOS:
-unzip releases/modules.zip
-
-# On Windows (PowerShell):
-Expand-Archive -Path releases/modules.zip -DestinationPath . -Force
+```text
+spermacore/
+├── core/              # Go runtime: dispatcher, LLM routing, SQLCipher storage, WebUI
+├── include/           # Stable C ABI headers (plugin_api.h)
+├── modules/           # Native C++20 dynamic plugins
+├── landing/           # Project dashboard & documentation landing page
+├── releases/          # Precompiled binaries and modules.zip package
+├── config.toml        # Application and provider configuration
+├── .env.example       # Secrets and credential templates
+└── CMakeLists.txt     # Root build script for C++ plugins
 ```
 
-After extraction, you will have a `modules/` directory containing the module sources:
-* `modules/telegram`: Telegram TDLib userbot transport (QR code login, message sending, reactions, typing)
-* `modules/embedsc`: Vector memory (HNSW indexing with SQLite storage)
-* `modules/agentloop`: Autonomous background initiative loop
-* `modules/grouper`: Message batching and debounce
-* `modules/media`: Emoji and sticker analysis
-* `modules/dashboard`: Live stats and module telemetry for WebUI
-* `modules/moderation`: Inbound filtering and rate limiting
-* `modules/websearch`: Web search tool for agents
-
-### 2. Building Modules
-
-You have two options to build the modules:
-
-#### Option A: Automatic build (recommended)
-When SpermaCore starts, if a module is listed in `config.toml` but its compiled binary (`.dll` or `.so`) is missing, the Go runtime automatically invokes CMake and compiles it from `modules/<name>/src`. 
-You only need CMake and a C++20 compiler (GCC, Clang, or MinGW) installed on your system.
-
-#### Option B: Manual build with CMake
-You can build all modules at once using the root `CMakeLists.txt`:
-
-```bash
-cmake -B build -G Ninja
-cmake --build build
-```
-
-Compiled binaries will be placed in their respective `modules/<name>/` directories.
-
-### 3. Enable modules in configuration
-Open `config.toml` and adjust the `[plugins]` section:
-
-```toml
-[plugins]
-path = "./modules"
-load = [
-  "telegram",
-  "embedsc",
-  "agentloop",
-  "media",
-  "dashboard",
-  "grouper",
-  "moderation"
-]
-```
+The core talks to modules via standard C function pointers (`plugin_get_api()`). Each plugin exports lifecycle hooks (`init`, `start`, `stop`, `destroy`) and optional event sinks, ensuring zero memory copies across language boundaries.
 
 ---
 
 ## Quickstart
 
-### Requirements
-* Go 1.22 or newer
-* CMake 3.20+ and GCC / Clang / MinGW with C++20 support (for building modules)
+### Prerequisites
+* Go 1.22+
+* CMake 3.20+ and a C++20 compiler (GCC, Clang, or MinGW)
 * TDLib binaries (`tdjson.dll` on Windows or `libtdjson.so` on Linux) inside `data/telegram/`
 
-### 1. Configure environment
-Copy the template and set your credentials:
+### 1. Extract Modules
+The source code of C++ modules is packaged into `releases/modules.zip` to keep clones lightweight:
+
+```bash
+# Linux / macOS
+unzip releases/modules.zip
+
+# Windows (PowerShell)
+Expand-Archive -Path releases/modules.zip -DestinationPath . -Force
+```
+
+### 2. Configure Environment
+Copy the environment template and provide your API keys:
 
 ```bash
 cp .env.example .env
 ```
 
-Fill in your secrets:
+Key environment variables:
 ```ini
 OPENROUTER_API_KEY=sk-or-v1-...
-SPERMACORE_TELEGRAM_API_ID=your_api_id
-SPERMACORE_TELEGRAM_API_HASH=your_api_hash
-SPERMACORE_TELEGRAM_PHONE=+1234567890
+SPERMACORE_TELEGRAM_API_ID=12345678
+SPERMACORE_TELEGRAM_API_HASH=abcdef0123456789...
 SPERMACORE_DB_KEY=your_secure_db_key
 ```
 
-### 2. Configure runtime
-Review `config.toml` to select your preferred LLM model, vision model, and enabled plugins.
+### 3. Build & Run
 
-### 3. Build and run
-Run directly with Go:
+Run directly through Go (uncompiled plugins in `config.toml` are automatically built by the Go runtime via CMake on first boot):
+
 ```bash
 go run ./core
 ```
 
-Or compile a binary:
+Or build a production executable:
 ```bash
 go build -o releases/spermacore.exe ./core
 ./releases/spermacore.exe
 ```
 
-Access the WebUI dashboard at `http://localhost:8080`.
+Access the local management WebUI at `http://localhost:8080`.
 
 ---
 
-## Architecture
+## Active Modules
 
-```text
-spermacore/
-├── core/              # Go engine (worker pool, event queue, LLM router, WebUI)
-├── include/           # C11 / C++20 ABI headers (plugin_api.h)
-├── releases/          # Prebuilt binaries and modules.zip archive
-├── config.toml        # Application configuration
-├── .env.example       # Environment template
-└── CMakeLists.txt     # Root CMake build file for modules
-```
+| Module | Language | Role |
+| :--- | :--- | :--- |
+| `telegram` | C++20 | Full TDLib userbot client (QR code auth, typing simulation, voice/photo transport) |
+| `embedsc` | C++20 | In-memory HNSW vector index for semantic retrieval and long-term memory |
+| `agentloop` | C++20 | Proactive reflection loop for autonomous task execution |
+| `media` | C++20 | Sticker, emoji, and image preprocessing pipeline |
+| `grouper` | C++20 | Inbound message grouping and anti-flood debouncing |
+| `moderation` | C++20 | User rate-limiting, allowlist, and blocklist policies |
+| `websearch` | C++20 | Low-overhead search engine scraper for live information retrieval |
+| `dashboard` | C++20 | Module telemetry and real-time health metrics streaming to WebUI |
 
-### Plugin ABI (1.7.1)
-All modules communicate with the Go core through a stable C ABI defined in `include/plugin_api.h`. 
-Modules export a single entrypoint `plugin_get_api()` that returns function pointers for lifecycle events (`init`, `start`, `stop`, `destroy`), transports, and tools.
+To enable or disable modules, adjust the `load` array under `[plugins]` in `config.toml`.
 
 ---
 
 ## Security
 
-* Secrets are strictly loaded from environment variables or `.env`. Never commit credentials to git.
-* SQLite databases use SQLCipher encryption via `SPERMACORE_DB_KEY`.
-* If `auth_token` is left empty in `config.toml`, WebUI binds strictly to loopback (`127.0.0.1`) and generates a temporary session key on startup.
+* Secrets and tokens are loaded strictly from environment variables or `.env`.
+* Local SQLite databases are encrypted at rest with SQLCipher using `SPERMACORE_DB_KEY`.
+* By default, the WebUI binds to `127.0.0.1` and uses a generated one-time session token if `auth_token` is left empty.
 
 ---
 
 ## License
 
-Distributed under the PolyForm Noncommercial License 1.0.0. See [LICENSE](LICENSE) or [polyformproject.org](https://polyformproject.org/licenses/noncommercial/1.0.0).
+Distributed under the PolyForm Noncommercial License 1.0.0. See [LICENSE](LICENSE) or visit [polyformproject.org](https://polyformproject.org/licenses/noncommercial/1.0.0) for terms.

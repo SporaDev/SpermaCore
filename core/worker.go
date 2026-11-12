@@ -43,11 +43,9 @@ var (
 	metricQueueLen atomic.Int64
 	metricActive   atomic.Int64
 
-	// track delayed message part sends
 	bgSendWG sync.WaitGroup
 )
 
-// interruptible sleep on shutdown
 func sleepOrShutdown(d time.Duration, done <-chan struct{}) bool {
 	if d <= 0 {
 		return true
@@ -137,7 +135,7 @@ func cancelTypingSoon(ev transportEvent, topicID int) {
 	SendTypingCancelViaTransport(ev, topicID)
 }
 
-// deliverVoiceReply synthesizes text and sends it as a voice note (ГС).
+// deliverVoiceReply synthesizes text and sends it as a voice note (voice message).
 // The duration passed to the transport is read from the provider's audio.
 func deliverVoiceReply(cfg *Config, ev transportEvent, text string, topicID int) error {
 	text = strings.TrimSpace(text)
@@ -332,7 +330,6 @@ func worker(id int, log *Logger) {
 			}
 		}
 
-		// streaming for webui
 		var onToken func(string)
 		var streamID string
 		if w := webui.Global(); w != nil {
@@ -431,7 +428,6 @@ func worker(id int, log *Logger) {
 			continue
 		}
 
-		// split AI bubbles
 		parts, actions := splitAIResponse(answer)
 		applyAIActions(task.cfg.Core.DataDir, task.ev, actions)
 		if len(parts) == 1 {
@@ -460,7 +456,7 @@ func worker(id int, log *Logger) {
 			parts = nil
 		}
 
-		// |VOICE| asks for the reply as a voice note (ГС). The duration comes
+		// |VOICE| asks for the reply as a voice note (voice message). The duration comes
 		// from the synthesized audio itself, so the voice note header matches
 		// what the provider actually returned.
 		if voiceText, ok := voiceActionText(actions, parts); ok {
@@ -509,7 +505,6 @@ func worker(id int, log *Logger) {
 			continue
 		}
 
-		// humanized background send
 		bgSendWG.Add(1)
 		ev := task.ev
 		go func(id int, ev transportEvent, parts []string, topicID int, log *Logger) {
@@ -517,7 +512,6 @@ func worker(id int, log *Logger) {
 			if len(parts) == 0 {
 				return
 			}
-			// per-chat serialization
 			gate := getChatGate(ev.ChatID)
 			if !gate.AcquireWithDone(shutdownCh) {
 				return
@@ -537,7 +531,6 @@ func worker(id int, log *Logger) {
 						}
 						rememberOutgoingMessage(ev, out)
 
-						// delayed typo correction
 						go func(sentMsgID int, correctText string) {
 							delay := time.Duration(1800+rand.Intn(1700)) * time.Millisecond
 							t := time.NewTimer(delay)

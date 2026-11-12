@@ -126,7 +126,7 @@ type TTSConfig struct {
 	Prompt string `toml:"prompt"`
 	// max_chars truncates the text passed to the provider.
 	MaxChars int `toml:"max_chars"`
-	// send_as_voice sends the result as a Telegram voice note (ГС).
+	// send_as_voice sends the result as a Telegram voice note (voice note).
 	SendAsVoice *bool `toml:"send_as_voice"`
 	Rewrite     *bool `toml:"rewrite"`
 	TimeoutSecs int   `toml:"timeout_seconds"`
