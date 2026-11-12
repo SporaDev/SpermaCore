@@ -19,7 +19,6 @@ type Config struct {
 	LLM     LLMConfig     `toml:"llm"`
 	Memory  MemoryConfig  `toml:"memory"`
 	TTS     TTSConfig     `toml:"tts"`
-	Call    CallConfig    `toml:"call"`
 	Plugins PluginsConfig `toml:"plugins"`
 
 	// custom plugin sections passed via config_get_*
@@ -260,7 +259,7 @@ func extractPluginSections(root map[string]any) map[string]map[string]any {
 func extractRootSections(root map[string]any) map[string]map[string]any {
 	out := make(map[string]map[string]any)
 	reserved := map[string]bool{
-		"core": true, "llm": true, "memory": true, "tts": true, "call": true,
+		"core": true, "llm": true, "memory": true, "tts": true,
 		"plugins": true,
 	}
 	for name, v := range root {
@@ -350,8 +349,6 @@ func (c *Config) applyDefaults() {
 	if c.TTS.Language == "" {
 		c.TTS.Language = "auto"
 	}
-
-	c.Call.applyDefaults()
 
 	if c.LLM.Models == nil {
 		c.LLM.Models = map[string]string{}

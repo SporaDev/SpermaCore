@@ -34,9 +34,8 @@ activation semantics: direct = you were addressed by name/@/reply, answer normal
 inline keyboards: when the current message has an inline keyboard, its buttons are listed in INLINE KEYBOARD ON CURRENT MESSAGE. press one with press_button(chat_id, message_id, button="text or index") only if it is useful. A button may appear shortly after the message is sent; press_button waits for the keyboard to appear, so call it instead of assuming the keyboard is missing.
 inline bots: you can query an inline bot with inline_query(bot="@name", query="...", chat_id=...) and send one of its results with send_inline_result(chat_id, query_id, result_id).
 invite links: if a group invite link looks interesting, first check_invite(link), then join_chat(link) only if you decide to join; otherwise do not join.
-voice notes: append |VOICE| to your reply to send it as a voice message (ГС) instead of text; use |VOICE=text| to voice a different wording. Do not add voice and text duplicates.
+voice notes: append |VOICE| to your reply to send it as a voice message (voice note) instead of text; use |VOICE=text| to voice a different wording. Do not add voice and text duplicates.
 premium reactions: react(..., emoji="custom:<id>") sets a Telegram Premium custom emoji reaction; ids come from list_custom_emojis or emoji.json.
-calls: call(action="start") starts a voice call (spoken greeting, incoming voice is transcribed, all answers are voiced automatically), call(action="end") hangs up, call(action="status") reports the state. Only start a call when the user asks for one.
 polls: if the current message is a Telegram poll or quiz, its question and options are listed with 0-based ids. Vote with vote_poll(chat_id, message_id, option_ids=[...]) when it fits or the user asks; never vote on a closed poll.
 media & photos: when the user sends a photo, video, or sticker, treat it as a natural conversational share. Look at what is shown and react naturally according to your persona and conversational context (comment on what is happening, express emotion, joke, or react with an emoji). NEVER give a dry, robotic, machine-like description of what is in the photo (e.g. 'На этой фотографии изображен...' or 'In this photo there is...') unless the user explicitly asked you to describe it (e.g. 'опиши фото', 'что на картинке?').
 empty answers: if there is nothing meaningful to say, call ignore. Never send "(empty)".`
@@ -399,27 +398,6 @@ func collectTools(addons []*LoadedAddon, log *Logger) ([]map[string]any, map[str
 		},
 	})
 	owners["ignore"] = nil
-
-	tools = append(tools, map[string]any{
-		"type": "function",
-		"function": map[string]any{
-			"name": "call",
-			"description": "Start or end a voice call with the user. On start the bot joins the call, greets by voice note " +
-				"and every incoming voice message is transcribed (Whisper) so the bot can answer by voice. " +
-				"Use action=start to call, action=end to hang up (optionally pass text as a spoken farewell), " +
-				"action=status to check whether a call is active. Only the current chat can be called.",
-			"parameters": map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"action":  map[string]any{"type": "string", "enum": []string{"start", "end", "status"}, "description": "start (default), end or status"},
-					"chat_id": map[string]any{"type": "integer", "description": "Optional chat id; defaults to the current chat"},
-					"text":    map[string]any{"type": "string", "description": "Optional spoken line: greeting on start, farewell on end"},
-				},
-				"required": []string{},
-			},
-		},
-	})
-	owners["call"] = nil
 
 	if _, exists := owners["block"]; !exists {
 		tools = append(tools, map[string]any{
@@ -869,13 +847,6 @@ func reactLoopAttempt(ctx context.Context, ev transportEvent, addons []*LoadedAd
 			} else if owner, ok := owners[toolName]; ok {
 				if toolName == "ignore" {
 					return "", errIgnoreMessage
-				}
-				if toolName == "call" {
-					var spoken string
-					result, spoken = handleCallTool(ev, string(argsJSON), log)
-					if spoken != "" {
-						delivered.add("chat:"+strconv.FormatInt(ev.ChatID, 10), spoken)
-					}
 				} else if toolName == "block" {
 					var args struct {
 						Username string `json:"username"`

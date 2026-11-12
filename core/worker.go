@@ -350,25 +350,6 @@ func worker(id int, log *Logger) {
 			}
 		}
 
-		// Voice transcription: transcribe incoming voice messages and audio files
-		// so the model reads the recognized text instead of attaching raw audio.
-		if task.ev.PhotoPath != "" && (task.ev.MediaType == "voice" || task.ev.MediaType == "audio") {
-			if tr, trErr := transcribeAudioFile(task.cfg, task.ev.PhotoPath); trErr != nil {
-				task.log.Warn("[worker %d] voice transcription failed: %v", id, trErr)
-			} else if strings.TrimSpace(tr) != "" {
-				task.log.Info("[worker %d] voice transcription: %.120q", id, tr)
-				if strings.TrimSpace(task.ev.Text) != "" {
-					task.ev.Text = strings.TrimSpace(task.ev.Text) + "\n" + strings.TrimSpace(tr)
-				} else {
-					task.ev.Text = strings.TrimSpace(tr)
-				}
-				task.ev.PhotoPath = ""
-				task.ev.MediaType = ""
-			}
-		}
-
-		// keep the typing indicator alive while the model generates; without
-		// this the indicator silently expires during long model calls
 		stopTyping := startTypingKeepAlive(task.ev, task.ev.TopicID)
 		start := time.Now()
 
@@ -465,17 +446,6 @@ func worker(id int, log *Logger) {
 				if len(parts) == 0 {
 					parts = []string{voiceText}
 				}
-			} else {
-				parts = nil
-			}
-		}
-
-		// Inside a call every answer is spoken, so the user hears the bot
-		// instead of receiving text while the "call" is going on.
-		if len(parts) > 0 && callSessionActive(task.ev.ChatID) {
-			spoken := strings.TrimSpace(strings.Join(parts, "\n"))
-			if voiceErr := deliverVoiceReply(task.cfg, task.ev, spoken, topicID); voiceErr != nil {
-				task.log.Warn("[worker %d] call voice reply failed, falling back to text: %v", id, voiceErr)
 			} else {
 				parts = nil
 			}
