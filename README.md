@@ -1,5 +1,14 @@
 # SpermaCore
 
+<p align="left">
+  <img src="https://img.shields.io/badge/Go-1.22+-00ADD8?style=flat-square&logo=go&logoColor=white" alt="Go 1.22+">
+  <img src="https://img.shields.io/badge/C%2B%2B-20-00599C?style=flat-square&logo=c%2B%2B&logoColor=white" alt="C++20">
+  <img src="https://img.shields.io/badge/ABI-v1.7.1-8b5cf6?style=flat-square" alt="ABI v1.7.1">
+  <img src="https://img.shields.io/badge/Telegram-TDLib-26A5E4?style=flat-square&logo=telegram&logoColor=white" alt="TDLib">
+  <img src="https://img.shields.io/badge/Storage-SQLCipher-003B57?style=flat-square&logo=sqlite&logoColor=white" alt="SQLCipher">
+  <img src="https://img.shields.io/badge/license-PolyForm%20Noncommercial-0ea5e9?style=flat-square" alt="PolyForm License">
+</p>
+
 Modular, crash-resilient runtime for autonomous LLM agents and Telegram userbots written in Go 1.22+ and C++20.
 
 [Russian version](README.ru.md) | [English version](README.md)
