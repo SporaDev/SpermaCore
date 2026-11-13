@@ -30,12 +30,12 @@ jobs:
           fi
 
       - name: Go Vet
-        run: go vet ./core
+        run: go vet ./core/...
 
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v6
         with:
-          version: v1.59.1
+          version: v1.64.6
           args: --timeout=5m ./core/...
 
   lint-cpp:
@@ -45,6 +45,12 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Unpack C++ Modules
+        run: |
+          if [ -f releases/modules.zip ]; then
+            unzip -q releases/modules.zip
+          fi
+
       - name: Install Clang Tools
         run: |
           sudo apt-get update
@@ -52,7 +58,7 @@ jobs:
 
       - name: Check C++20 Formatting
         run: |
-          find modules include -type f \( -name "*.cpp" -o -name "*.hpp" -o -name "*.h" \) -exec clang-format --dry-run -Werror {} +
+          find include modules -type f \( -name "*.cpp" -o -name "*.hpp" -o -name "*.h" \) ! -path "*/build/*" -exec clang-format --dry-run -Werror {} +
 
   build-core:
     name: Build Core & Modules
@@ -69,7 +75,13 @@ jobs:
       - name: Install Build Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build build-essential
+          sudo apt-get install -y cmake ninja-build build-essential unzip
+
+      - name: Unpack C++ Modules
+        run: |
+          if [ -f releases/modules.zip ]; then
+            unzip -q -o releases/modules.zip
+          fi
 
       - name: Build C++ Modules (CMake & Ninja)
         run: |
