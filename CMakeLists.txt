@@ -35,7 +35,7 @@ foreach(module_dir IN LISTS module_dirs)
     else()
         target_compile_options("${module_name}" PRIVATE
             -Wall -Wextra -Werror
-            $<$<COMPILE_LANGUAGE:CXX>:-Wno-missing-field-initializers>)
+            $<$<COMPILE_LANGUAGE:CXX>:-Wno-missing-field-initializers -Wno-format-truncation>)
     endif()
 
     set_target_properties("${module_name}" PROPERTIES

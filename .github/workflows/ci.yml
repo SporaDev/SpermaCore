@@ -32,11 +32,13 @@ jobs:
       - name: Go Vet
         run: go vet ./core/...
 
-      - name: golangci-lint
-        uses: golangci/golangci-lint-action@v6
-        with:
-          version: v1.60.3
-          args: --timeout=5m ./core/...
+      - name: Install golangci-lint
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(go env GOPATH)/bin v1.60.3
+
+      - name: Run golangci-lint
+        run: |
+          $(go env GOPATH)/bin/golangci-lint run --timeout=5m ./core/...
 
   lint-cpp:
     name: Lint C++ (Modules & ABI)
