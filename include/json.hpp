@@ -90,7 +90,7 @@ inline Value make_array() {
 // parsing
 
 class Parser {
-public:
+   public:
     explicit Parser(std::string_view text) : s_(text) {}
 
     bool parse(Value& out) {
@@ -102,7 +102,7 @@ public:
 
     const std::string& error() const { return error_; }
 
-private:
+   private:
     std::string_view s_;
     size_t pos_ = 0;
     std::string error_;
@@ -127,8 +127,10 @@ private:
         if (pos_ >= s_.size()) return fail("unexpected end");
         char c = s_[pos_];
         switch (c) {
-            case '{': return parse_object(out);
-            case '[': return parse_array(out);
+            case '{':
+                return parse_object(out);
+            case '[':
+                return parse_array(out);
             case '"':
                 out.type = Type::String;
                 return parse_string(out.string);
@@ -148,8 +150,16 @@ private:
                 out = Value{};
                 return true;
             case '-':
-            case '0': case '1': case '2': case '3': case '4':
-            case '5': case '6': case '7': case '8': case '9':
+            case '0':
+            case '1':
+            case '2':
+            case '3':
+            case '4':
+            case '5':
+            case '6':
+            case '7':
+            case '8':
+            case '9':
                 return parse_number(out);
             default:
                 return fail("invalid value start");
@@ -157,7 +167,7 @@ private:
     }
 
     bool parse_object(Value& out) {
-        pos_++; // skip '{'
+        pos_++;  // skip '{'
         out.type = Type::Object;
         out.object.clear();
         skip_ws();
@@ -192,7 +202,7 @@ private:
     }
 
     bool parse_array(Value& out) {
-        pos_++; // skip '['
+        pos_++;  // skip '['
         out.type = Type::Array;
         out.array.clear();
         skip_ws();
@@ -220,9 +230,18 @@ private:
     }
 
     static bool hex_val(char c, uint32_t& v) {
-        if (c >= '0' && c <= '9') { v = c - '0'; return true; }
-        if (c >= 'a' && c <= 'f') { v = c - 'a' + 10; return true; }
-        if (c >= 'A' && c <= 'F') { v = c - 'A' + 10; return true; }
+        if (c >= '0' && c <= '9') {
+            v = c - '0';
+            return true;
+        }
+        if (c >= 'a' && c <= 'f') {
+            v = c - 'a' + 10;
+            return true;
+        }
+        if (c >= 'A' && c <= 'F') {
+            v = c - 'A' + 10;
+            return true;
+        }
         return false;
     }
 
@@ -256,7 +275,7 @@ private:
     }
 
     bool parse_string(std::string& out) {
-        pos_++; // skip opening quote
+        pos_++;  // skip opening quote
         out.clear();
         while (pos_ < s_.size()) {
             char c = s_[pos_++];
@@ -265,14 +284,30 @@ private:
                 if (pos_ >= s_.size()) return fail("unterminated escape");
                 char e = s_[pos_++];
                 switch (e) {
-                    case '"':  out.push_back('"'); break;
-                    case '\\': out.push_back('\\'); break;
-                    case '/':  out.push_back('/'); break;
-                    case 'b':  out.push_back('\b'); break;
-                    case 'f':  out.push_back('\f'); break;
-                    case 'n':  out.push_back('\n'); break;
-                    case 'r':  out.push_back('\r'); break;
-                    case 't':  out.push_back('\t'); break;
+                    case '"':
+                        out.push_back('"');
+                        break;
+                    case '\\':
+                        out.push_back('\\');
+                        break;
+                    case '/':
+                        out.push_back('/');
+                        break;
+                    case 'b':
+                        out.push_back('\b');
+                        break;
+                    case 'f':
+                        out.push_back('\f');
+                        break;
+                    case 'n':
+                        out.push_back('\n');
+                        break;
+                    case 'r':
+                        out.push_back('\r');
+                        break;
+                    case 't':
+                        out.push_back('\t');
+                        break;
                     case 'u': {
                         uint32_t cp = 0;
                         if (!parse_unicode_escape(cp)) return false;
@@ -304,9 +339,8 @@ private:
         if (s_[pos_] == '-') pos_++;
         if (pos_ >= s_.size()) return fail("bad number");
         bool is_float = false;
-        while (pos_ < s_.size() && ((s_[pos_] >= '0' && s_[pos_] <= '9') ||
-                                    s_[pos_] == '.' || s_[pos_] == 'e' || s_[pos_] == 'E' ||
-                                    s_[pos_] == '+' || s_[pos_] == '-')) {
+        while (pos_ < s_.size() && ((s_[pos_] >= '0' && s_[pos_] <= '9') || s_[pos_] == '.' || s_[pos_] == 'e' ||
+                                    s_[pos_] == 'E' || s_[pos_] == '+' || s_[pos_] == '-')) {
             if (s_[pos_] == '.' || s_[pos_] == 'e' || s_[pos_] == 'E') is_float = true;
             pos_++;
         }
@@ -350,13 +384,27 @@ inline void dump_string(std::string& out, std::string_view s) {
     out.push_back('"');
     for (unsigned char c : s) {
         switch (c) {
-            case '"': out += "\\\""; break;
-            case '\\': out += "\\\\"; break;
-            case '\b': out += "\\b"; break;
-            case '\f': out += "\\f"; break;
-            case '\n': out += "\\n"; break;
-            case '\r': out += "\\r"; break;
-            case '\t': out += "\\t"; break;
+            case '"':
+                out += "\\\"";
+                break;
+            case '\\':
+                out += "\\\\";
+                break;
+            case '\b':
+                out += "\\b";
+                break;
+            case '\f':
+                out += "\\f";
+                break;
+            case '\n':
+                out += "\\n";
+                break;
+            case '\r':
+                out += "\\r";
+                break;
+            case '\t':
+                out += "\\t";
+                break;
             default:
                 if (c < 0x20) {
                     char buf[7];
