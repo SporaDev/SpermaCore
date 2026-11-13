@@ -47,9 +47,9 @@ The core talks to modules via standard C function pointers (`plugin_get_api()`).
 ## Quickstart
 
 ### Prerequisites
-* Go 1.22+
-* CMake 3.20+ and a C++20 compiler (GCC, Clang, or MinGW)
-* TDLib binaries (`tdjson.dll` on Windows or `libtdjson.so` on Linux) inside `data/telegram/`
+* Go 1.22+.
+* CMake 3.20+ and a C++20 compiler (GCC, Clang, or MinGW).
+* TDLib binaries (`tdjson.dll` on Windows or `libtdjson.so` on Linux) inside `data/telegram/`.
 
 ### 1. Extract Modules
 The source code of C++ modules is packaged into `releases/modules.zip` to keep clones lightweight:
