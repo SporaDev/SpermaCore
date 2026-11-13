@@ -156,6 +156,7 @@ func Close() error {
 	}
 	return nil
 }
+
 // reports whether embedding service is initialized
 func Enabled() bool {
 	initMu.Lock()

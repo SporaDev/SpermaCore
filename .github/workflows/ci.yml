@@ -1,0 +1,81 @@
+name: CI & Linting
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  lint-go:
+    name: Lint Go (Core)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          check-latest: true
+
+      - name: Verify Go Formatting
+        run: |
+          diffs=$(gofmt -l core/)
+          if [ -n "$diffs" ]; then
+            echo "Unformatted Go files detected:"
+            echo "$diffs"
+            exit 1
+          fi
+
+      - name: Go Vet
+        run: go vet ./core
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.59.1
+          args: --timeout=5m ./core/...
+
+  lint-cpp:
+    name: Lint C++ (Modules & ABI)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Clang Tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-format
+
+      - name: Check C++20 Formatting
+        run: |
+          find modules include -type f \( -name "*.cpp" -o -name "*.hpp" -o -name "*.h" \) -exec clang-format --dry-run -Werror {} +
+
+  build-core:
+    name: Build Core & Modules
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Install Build Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build build-essential
+
+      - name: Build C++ Modules (CMake & Ninja)
+        run: |
+          cmake -B build -G Ninja
+          cmake --build build
+
+      - name: Build Go Core Binary
+        run: |
+          go build -v -o releases/spermacore ./core
