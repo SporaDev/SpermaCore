@@ -118,8 +118,7 @@ func setEventAddons(addons []*LoadedAddon, log *Logger) {
 func transportOwner(name string) *LoadedAddon {
 	busMu.RLock()
 	defer busMu.RUnlock()
-	owner, _ := transports[name]
-	return owner
+	return transports[name]
 }
 
 // transport dashboard status
@@ -379,9 +378,6 @@ func callToolAsync(tool, args string, cb unsafe.Pointer, ud unsafe.Pointer) uint
 			cPayload := C.CString(result)
 			var out *C.char
 			C.c_invoke_callback(cb, ud, cName, cPayload, &out)
-			if out != nil {
-				// callback out_json owned by plugin
-			}
 			C.free(unsafe.Pointer(cName))
 			C.free(unsafe.Pointer(cPayload))
 		}

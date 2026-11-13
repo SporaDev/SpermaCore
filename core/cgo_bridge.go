@@ -1154,7 +1154,7 @@ func reloadConfig() uint32 {
 		if a == nil {
 			continue
 		}
-		section, _ := sections[a.Name]
+		section := sections[a.Name]
 		if section == nil {
 			section = map[string]any{}
 		}
