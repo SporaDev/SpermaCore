@@ -51,8 +51,20 @@ The core talks to modules via standard C function pointers (`plugin_get_api()`).
 * CMake 3.20+ and a C++20 compiler (GCC, Clang, or MinGW).
 * TDLib binaries (`tdjson.dll` on Windows or `libtdjson.so` on Linux) inside `data/telegram/`.
 
-### 1. Extract Modules
-The source code of C++ modules is packaged into `releases/modules.zip` to keep clones lightweight:
+### 1. Extract & Manage Modules
+
+The recommended way to bootstrap, verify, and manage modules is using **[scpkg](https://github.com/SporaDev/scpkg)** (SpermaCore Package Manager):
+
+```bash
+# Bootstrap official modules and compile
+scpkg bootstrap
+
+# Or install individual modules from the registry
+scpkg install telegram
+scpkg install websearch
+```
+
+Alternatively, you can unpack `releases/modules.zip` manually:
 
 ```bash
 # Linux / macOS

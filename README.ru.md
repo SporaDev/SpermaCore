@@ -51,8 +51,20 @@ spermacore/
 * CMake 3.20+ и компилятор C++20 (GCC, Clang или MinGW).
 * Библиотеки TDLib (`tdjson.dll` под Windows или `libtdjson.so` под Linux) в каталоге `data/telegram/`.
 
-### 1. Распаковка модулей
-Исходники C++ модулей упакованы в `releases/modules.zip` для компактности репозитория:
+### 1. Установка и управление модулями
+
+Рекомендуемый способ распаковки, проверки подписей и управления модулями — через менеджер **[scpkg](https://github.com/SporaDev/scpkg)**:
+
+```bash
+# Быстрый bootstrap официальных модулей и компиляция
+scpkg bootstrap
+
+# Или установка отдельных плагинов из реестра
+scpkg install telegram
+scpkg install websearch
+```
+
+Либо распакуйте архив `releases/modules.zip` вручную:
 
 ```bash
 # Linux / macOS
